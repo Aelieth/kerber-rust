@@ -600,3 +600,41 @@ impl Kadm5Api for RemoteBackend {
         self.client.get_privs().map_err(wire)
     }
 }
+
+#[cfg(test)]
+mod oracle {
+    use super::{Auth, AuthFlavours, Connect, GET_MASK, Io, RemoteBackend};
+    use crate::kadmin_cli::stdio::Stdout;
+
+    /// One `GET_PRINCIPAL` of a name sent as given, realm or not, to a live kadmind.
+    #[test]
+    #[ignore = "needs a live kadmind: KADM5_ORACLE_{SERVER,REALM,PRINC,KEYTAB,NAME}"]
+    fn getprinc_as_sent() {
+        let var = |k: &str| std::env::var(format!("KADM5_ORACLE_{k}")).unwrap();
+        let conf = krb5_config::load_krb5_conf().expect("KRB5_CONFIG");
+        let (server, realm, princ, keytab) =
+            (var("SERVER"), var("REALM"), var("PRINC"), var("KEYTAB"));
+        let mut io = Io {
+            prog: "kadmin",
+            out: Stdout::new(Box::new(std::io::stdout()), false),
+            err: Box::new(std::io::stderr()),
+            input: Box::new(std::io::empty()),
+            tty_in: false,
+            script_mode: false,
+            exit_status: 0,
+            interrupted: false,
+        };
+        let c = Connect {
+            realm: &realm,
+            princstr: &princ,
+            auth: Auth::Keytab(Some(&keytab)),
+            admin_server: Some(&server),
+            flavours: AuthFlavours::default(),
+        };
+        let mut b = RemoteBackend::connect(&mut io, &c, &conf).unwrap();
+        let name = var("NAME");
+        let got = b.client.get_principal(&name, GET_MASK);
+        let (code, principal) = got.map_or_else(|c| (c, String::new()), |p| (0, p.principal));
+        println!("ORACLE_GETPRINC sent={name} code={code} principal={principal}");
+    }
+}

@@ -47,6 +47,25 @@ pub(crate) fn chpass_error_text(e: &crate::Error) -> String {
     log::kadm5_error_text(dispatch::kadm5_code(codes::CHPASS_PRINCIPAL, e))
 }
 
+// MIT: `process_chpw_request` (kadmin/server/schpw.c:249-270)
+pub(crate) fn kpasswd_result(kadm5_code: u32) -> u16 {
+    use codes::{
+        KADM5_AUTH_CHANGEPW, KADM5_AUTH_INITIAL, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT,
+        KADM5_PASS_Q_GENERIC, KADM5_PASS_Q_TOOSHORT, KADM5_PASS_REUSE, KADM5_PASS_TOOSOON,
+    };
+    match kadm5_code {
+        KADM5_AUTH_CHANGEPW => 5,
+        KADM5_AUTH_INITIAL => 7,
+        KADM5_PASS_Q_TOOSHORT
+        | KADM5_PASS_REUSE
+        | KADM5_PASS_Q_CLASS
+        | KADM5_PASS_Q_DICT
+        | KADM5_PASS_Q_GENERIC
+        | KADM5_PASS_TOOSOON => 4,
+        _ => 2,
+    }
+}
+
 /// Includes errno.
 pub(crate) fn chpass_store_error_text(e: &krb5_kdc::Error) -> String {
     log::kadm5_error_text(dispatch::store_code(codes::CHPASS_PRINCIPAL, e))

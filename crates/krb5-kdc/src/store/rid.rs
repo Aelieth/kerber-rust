@@ -44,7 +44,18 @@ impl PrincipalStore {
         self.next_rid
     }
 
-    pub fn set_domain_sid(&mut self, sid: RpcSid) {
+    /// On a host store only inside a change: outside one memory would no longer match the host.
+    pub fn set_domain_sid(&mut self, sid: RpcSid) -> Result<(), Error> {
+        if self.host.is_some() && !self.saves_held {
+            return Err(Error::InvalidArgument(
+                "a host store's domain SID changes only inside a change".to_owned(),
+            ));
+        }
+        self.domain_sid = sid;
+        Ok(())
+    }
+
+    pub(crate) fn put_domain_sid(&mut self, sid: RpcSid) {
         self.domain_sid = sid;
     }
 

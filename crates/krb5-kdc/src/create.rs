@@ -1,6 +1,6 @@
 //! kdb5_util create.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use krb5_config::{KdcConf, KdcPaths, ProfileSet};
 use krb5_crypto::{EncryptionType, ProtocolKey};
@@ -560,9 +560,20 @@ pub fn open_or_create_host(
     };
     let loaded = host.load().map_err(Error::Host)?;
     let stash = &host_paths.stash;
+    let marker = bootstrap_marker(stash);
     let fresh = loaded.realm.is_none() && loaded.principals.is_empty();
+    if fresh && !stash.exists() && marker.exists() {
+        return Err(Error::BootstrapMarkerWithoutStash { marker });
+    }
+    let retry = fresh && stash.exists() && marker_matches(&marker, realm, stash);
+    let stashed = || -> Result<(ProtocolKey, u32, u16), Error> {
+        let (key, kvno) = crate::persist::read_stashed_master(stash).map_err(|e| db_err(&e))?;
+        let mkvno = u16::try_from(kvno)
+            .map_err(|_| Error::InvalidArgument("master kvno does not fit".to_owned()))?;
+        Ok((key, kvno, mkvno))
+    };
     let (mut store, master, mkvno) = match (fresh, stash.exists()) {
-        (true, true) => {
+        (true, true) if !retry => {
             return Err(Error::StashWithoutHostRealm {
                 stash: stash.clone(),
             });
@@ -578,11 +589,13 @@ pub fn open_or_create_host(
             MasterKey::Random { etype: None },
             1,
         ),
+        (true, true) => {
+            let (key, _, mkvno) = stashed()?;
+            (PrincipalStore::try_new(realm)?, MasterKey::Key(key), mkvno)
+        }
         (false, true) => {
             crate::lockout::check_host_file(&host_paths.lockout)?;
-            let (key, kvno) = crate::persist::read_stashed_master(stash).map_err(|e| db_err(&e))?;
-            let mkvno = u16::try_from(kvno)
-                .map_err(|_| Error::InvalidArgument("master kvno does not fit".to_owned()))?;
+            let (key, kvno, mkvno) = stashed()?;
             let seal = crate::host::SealKey {
                 kvno,
                 key: key.clone(),
@@ -591,42 +604,87 @@ pub fn open_or_create_host(
             (store, MasterKey::Key(key), mkvno)
         }
     };
-    let boot = bootstrap_realm_into(
-        &mut store,
-        master,
-        &RealmSpec {
-            realm,
-            profile,
-            mkvno,
-            admin,
-        },
-    )?;
-    let seal = crate::host::SealKey {
-        kvno: u32::from(boot.kvno),
-        key: boot.master.clone(),
-    };
-    if fresh {
-        crate::persist::write_stash(stash, realm, &boot.master, u32::from(boot.kvno))?;
-        crate::lockout::create_lockout_file(&host_paths.lockout)?;
-    }
-    if fresh || !boot.created.is_empty() {
-        let ids = if fresh {
-            store.ids()
-        } else {
-            boot.created.clone()
+    // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:504-508)
+    let (boot, seal) = store.defer_postcommit(|store| -> Result<_, Error> {
+        let boot = bootstrap_realm_into(
+            store,
+            master,
+            &RealmSpec {
+                realm,
+                profile,
+                mkvno,
+                admin,
+            },
+        )?;
+        let seal = crate::host::SealKey {
+            kvno: u32::from(boot.kvno),
+            key: boot.master.clone(),
         };
-        let committed = store
-            .host_rows(&ids, fresh, &seal)
-            .and_then(|batch| host.commit(batch).map_err(Error::Host));
-        if let Err(e) = committed {
-            if fresh {
-                let _ = std::fs::remove_file(stash);
+        if fresh {
+            if !retry {
+                crate::persist::write_stash(stash, realm, &boot.master, u32::from(boot.kvno))?;
+                write_marker(&marker, &marker_line(realm, stash)?)?;
             }
-            return Err(e);
+            crate::lockout::create_lockout_file(&host_paths.lockout)?;
         }
+        if fresh || !boot.created.is_empty() {
+            let ids = if fresh {
+                store.ids()
+            } else {
+                boot.created.clone()
+            };
+            store
+                .host_bootstrap_change(&ids, fresh, &seal)
+                .and_then(|change| host.commit_change(change).map_err(Error::Host))?;
+        }
+        Ok((boot, seal))
+    })?;
+    if marker.exists() && std::fs::remove_file(&marker).is_ok() {
+        let _ = crate::lockout::sync_parent(&marker);
     }
     store.attach_host(host, seal, host_paths.lockout.clone());
     Ok((store, boot))
+}
+
+fn bootstrap_marker(stash: &Path) -> PathBuf {
+    let mut name = stash.as_os_str().to_owned();
+    name.push(".bootstrap");
+    PathBuf::from(name)
+}
+
+fn marker_line(realm: &str, stash: &Path) -> Result<String, Error> {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let bytes = krb5_protocol::read_stash_file(stash).map_err(|e| db_err(&e))?;
+    let mut line = format!("kerber-rust bootstrap {realm} ");
+    for b in sha2::Sha256::digest(&*bytes) {
+        let _ = write!(line, "{b:02x}");
+    }
+    line.push('\n');
+    Ok(line)
+}
+
+fn write_marker(marker: &Path, line: &str) -> Result<(), Error> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits())
+        .open(marker)
+        .map_err(|e| db_err(&e))?;
+    file.write_all(line.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| crate::lockout::sync_parent(marker))
+        .map_err(|e| db_err(&e))
+}
+
+fn marker_matches(marker: &Path, realm: &str, stash: &Path) -> bool {
+    use std::io::Read as _;
+    let mut text = String::new();
+    let read = std::fs::File::open(marker).and_then(|f| f.take(4096).read_to_string(&mut text));
+    read.is_ok() && marker_line(realm, stash).is_ok_and(|want| text == want)
 }
 
 fn open_failure(f: crate::daemon::OpenFailure) -> Error {

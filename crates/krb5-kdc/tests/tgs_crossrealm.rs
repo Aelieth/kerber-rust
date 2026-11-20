@@ -1083,7 +1083,7 @@ fn user_key() -> ProtocolKey {
 
 fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, PrincipalName) {
     let (mut local, acl_a) = bootstrap_documented().expect("local");
-    local.set_domain_sid(RpcSid::nt_domain(9, 8, 7));
+    local.set_domain_sid(RpcSid::nt_domain(9, 8, 7)).unwrap();
     // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
     local.policy.ad_identity = true;
     let mut foreign = PrincipalStore::bootstrap(
@@ -1094,7 +1094,9 @@ fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, Princ
         TEST_ADMIN_PASSWORD,
     )
     .expect("foreign");
-    foreign.set_domain_sid(RpcSid::nt_domain(11, 12, 13));
+    foreign
+        .set_domain_sid(RpcSid::nt_domain(11, 12, 13))
+        .unwrap();
     let actor_b = format!("{TEST_ADMIN}@OTHER.TEST");
     let acl_b = Acl::allow_admin(&actor_b).expect("acl");
     let host_b = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);

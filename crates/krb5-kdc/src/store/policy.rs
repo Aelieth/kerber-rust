@@ -79,6 +79,7 @@ pub struct Policy {
     pub host_based_services: String,
     pub no_host_referral: String,
     pub domain_realm: BTreeMap<String, String>,
+    pub default_realm: Option<String>,
     pub encrypted_challenge_indicator: Option<String>,
     pub pkinit_indicators: Vec<String>,
     pub spake_preauth_indicators: Vec<String>,
@@ -128,6 +129,7 @@ impl Default for Policy {
             host_based_services: String::new(),
             no_host_referral: String::new(),
             domain_realm: BTreeMap::new(),
+            default_realm: None,
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
@@ -301,6 +303,11 @@ impl PrincipalStore {
                     "kdc.conf domain_sid is not valid SDDL: {s}"
                 )));
             };
+            if self.host.is_some() && sid != self.domain_sid {
+                return Err(Error::InvalidArgument(format!(
+                    "kdc.conf domain_sid {s} is not the host realm's"
+                )));
+            }
             self.domain_sid = sid;
         }
         self.policy.ad_identity = conf.domain_sid.is_some();
@@ -456,6 +463,7 @@ impl PrincipalStore {
         // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:251-252)
         self.policy.skew = i64::from(conf.clockskew);
         self.policy.domain_realm.clone_from(&conf.domain_realm);
+        self.policy.default_realm.clone_from(&conf.default_realm);
     }
 
     #[must_use]

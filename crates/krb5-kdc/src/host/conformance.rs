@@ -7,7 +7,8 @@ use krb5_config::{Krb5Conf, ProfileSet};
 use krb5_types::PrincipalName;
 
 use super::{
-    KerberosStore, KerberosStoreError, LoadedRealm, PrincipalRow, RealmBatch, SealKey, open_policy,
+    Caller, HostChange, KerberosStore, KerberosStoreError, LoadedRealm, Operation, PrincipalRow,
+    RealmBatch, SealKey, WriteIntent, open_policy,
 };
 use crate::create::{MasterKey, RealmSpec, bootstrap_realm_into};
 use crate::error::Error;
@@ -22,11 +23,24 @@ pub struct Row {
     pub outcome: Result<(), String>,
 }
 
-type NewStore<'a> = &'a dyn Fn() -> Arc<dyn KerberosStore>;
-type Check = fn(NewStore<'_>) -> Result<(), String>;
+/// How a host commits a change it makes itself: its bootstrap, and `change_committing`'s closure.
+pub type OwnCommit = Arc<dyn Fn(HostChange) -> Result<(), KerberosStoreError> + Send + Sync>;
 
-pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
-    let rows: [(&'static str, Check); 8] = [
+type NewHost<'a> = &'a dyn Fn() -> (Arc<dyn KerberosStore>, OwnCommit);
+type Check = fn(NewHost<'_>) -> Result<(), String>;
+
+/// For a host whose own changes go through `commit_change`, as `MemoryRealm`'s do.
+pub fn run(new_store: &dyn Fn() -> Arc<dyn KerberosStore>) -> Vec<Row> {
+    run_own(&|| {
+        let host = new_store();
+        let own = Arc::clone(&host);
+        (host, Arc::new(move |c| own.commit_change(c)) as OwnCommit)
+    })
+}
+
+/// Each fresh host, with the path its own changes take.
+pub fn run_own(new_host: NewHost<'_>) -> Vec<Row> {
+    let rows: [(&'static str, Check); 18] = [
         ("a realm round-trips", round_trip),
         (
             "a refused, failed or not-ready commit restores memory",
@@ -41,11 +55,45 @@ pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
         ("a broken seal is refused", broken_seals),
         ("change_committing commits once", commits_once),
         ("a mutator outside a change is refused", outside_change),
+        (
+            "a panic in the commit or the change restores memory",
+            panics_restore,
+        ),
+        (
+            "kadmin/history commits with the change that made it",
+            history_in_the_change,
+        ),
+        (
+            "a refused change leaves no kadmin/history",
+            history_rolls_back,
+        ),
+        (
+            "a commit carries each touched row with its mask",
+            rows_and_masks,
+        ),
+        (
+            "a declared intent reaches the host; a change of nothing does not",
+            declared_intent,
+        ),
+        (
+            "a denied commit restores memory without a reload",
+            denied_restores,
+        ),
+        (
+            "the host mark is set only in a change and survives a reload",
+            host_mark,
+        ),
+        ("no lockout field is in a row's mask", no_lockout_bits),
+        (
+            "bulk loads and an outside SID change are refused",
+            bulk_refused,
+        ),
+        ("a dumped realm imports into an empty host", empty_import),
     ];
     rows.into_iter()
         .map(|(name, row)| Row {
             name,
-            outcome: row(new_store),
+            outcome: row(new_host),
         })
         .collect()
 }
@@ -62,7 +110,10 @@ fn name(n: &str) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, n.split('/'))
 }
 
-fn fresh(host: Arc<dyn KerberosStore>) -> Result<(PrincipalStore, SealKey), String> {
+fn fresh(
+    host: Arc<dyn KerberosStore>,
+    own: &OwnCommit,
+) -> Result<(PrincipalStore, SealKey), String> {
     let mut built = PrincipalStore::try_new(REALM).map_err(fail)?;
     let profile = ProfileSet::from_structs(REALM, Krb5Conf::default(), None);
     let spec = RealmSpec {
@@ -73,8 +124,7 @@ fn fresh(host: Arc<dyn KerberosStore>) -> Result<(PrincipalStore, SealKey), Stri
     };
     bootstrap_realm_into(&mut built, MasterKey::Random { etype: None }, &spec).map_err(fail)?;
     let seal = built.host_seal_key().ok_or("no master key")?;
-    host.commit(built.host_full_batch().map_err(fail)?)
-        .map_err(fail)?;
+    own(built.host_full_change().map_err(fail)?).map_err(fail)?;
     let store = PrincipalStore::open_host(host, REALM, seal.clone()).map_err(fail)?;
     Ok((store, seal))
 }
@@ -98,11 +148,19 @@ enum Fault {
     Fail,
     NotReady,
     CommitThenFail,
+    Panic,
+    Deny,
 }
+
+/// What a commit said: the operation, then each row's id, mask and mark.
+type Seen = (Operation, Caller, Vec<(String, u32, bool)>);
 
 struct Faulty {
     inner: Arc<dyn KerberosStore>,
+    inner_own: OwnCommit,
     next: Mutex<Option<Fault>>,
+    commits: Mutex<Vec<Vec<String>>>,
+    seen: Mutex<Vec<Seen>>,
 }
 
 impl Faulty {
@@ -116,35 +174,93 @@ impl KerberosStore for Faulty {
         self.inner.load()
     }
 
-    fn commit(&self, batch: RealmBatch) -> Result<(), KerberosStoreError> {
+    fn commit_change(&self, change: HostChange) -> Result<(), KerberosStoreError> {
         let fault = self
             .next
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        self.record(&change);
         match fault {
-            None => self.inner.commit(batch),
+            None => self.inner.commit_change(change),
+            Some(Fault::Deny) => Err(KerberosStoreError::Denied(super::Denial {
+                kadm5_code: DENIED_CODE,
+                text: "conformance".to_owned(),
+            })),
             Some(Fault::Refuse) => Err(KerberosStoreError::Refused("conformance".to_owned())),
             Some(Fault::Fail) => Err(KerberosStoreError::Failed("conformance".to_owned())),
             Some(Fault::NotReady) => Err(KerberosStoreError::NotReady("conformance".to_owned())),
             Some(Fault::CommitThenFail) => {
-                self.inner.commit(batch)?;
+                self.inner.commit_change(change)?;
                 Err(KerberosStoreError::Failed("conformance".to_owned()))
             }
+            #[expect(clippy::panic, reason = "the row arms the store's panic guard")]
+            Some(Fault::Panic) => panic!("conformance: the host's commit panics"),
         }
     }
 }
 
-fn faulty(new_store: NewStore<'_>) -> Arc<Faulty> {
+const DENIED_CODE: u32 = 43_787_522;
+
+impl Faulty {
+    fn record(&self, change: &HostChange) {
+        self.commits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(
+                change
+                    .batch
+                    .upsert_principals
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect(),
+            );
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((
+                change.intent.operation,
+                change.intent.caller.clone(),
+                change
+                    .rows
+                    .iter()
+                    .map(|r| (r.id.clone(), r.mask, r.host_owned))
+                    .collect(),
+            ));
+    }
+
+    /// The inner host's own path, logged as `commit_change` logs.
+    fn own(self: &Arc<Self>) -> OwnCommit {
+        let me = Arc::clone(self);
+        Arc::new(move |change| {
+            me.record(&change);
+            (me.inner_own)(change)
+        })
+    }
+
+    fn seen(&self) -> Vec<Seen> {
+        std::mem::take(&mut *self.seen.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn commits(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.commits.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+fn faulty(new_host: NewHost<'_>) -> Arc<Faulty> {
+    let (inner, inner_own) = new_host();
     Arc::new(Faulty {
-        inner: new_store(),
+        inner,
+        inner_own,
         next: Mutex::new(None),
+        commits: Mutex::new(Vec::new()),
+        seen: Mutex::new(Vec::new()),
     })
 }
 
-fn round_trip(new_store: NewStore<'_>) -> Result<(), String> {
-    let host = new_store();
-    let (mut store, seal) = fresh(Arc::clone(&host))?;
+fn round_trip(new_host: NewHost<'_>) -> Result<(), String> {
+    let (host, own) = new_host();
+    let (mut store, seal) = fresh(Arc::clone(&host), &own)?;
     add(&mut store, "conformance/one").map_err(fail)?;
     let again = PrincipalStore::open_host(host, REALM, seal).map_err(fail)?;
     ensure(
@@ -165,10 +281,10 @@ fn round_trip(new_store: NewStore<'_>) -> Result<(), String> {
     Ok(())
 }
 
-fn restores(new_store: NewStore<'_>) -> Result<(), String> {
+fn restores(new_host: NewHost<'_>) -> Result<(), String> {
     for fault in [Fault::Refuse, Fault::Fail, Fault::NotReady] {
-        let host = faulty(new_store);
-        let (mut store, _) = fresh(host.clone())?;
+        let host = faulty(new_host);
+        let (mut store, _) = fresh(host.clone(), &host.own())?;
         host.arm(fault);
         ensure(
             add(&mut store, "conformance/one").is_err(),
@@ -191,9 +307,9 @@ fn restores(new_store: NewStore<'_>) -> Result<(), String> {
     Ok(())
 }
 
-fn unknown_outcome(new_store: NewStore<'_>) -> Result<(), String> {
-    let host = faulty(new_store);
-    let (mut store, _) = fresh(host.clone())?;
+fn unknown_outcome(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
     host.arm(Fault::CommitThenFail);
     ensure(
         add(&mut store, "conformance/one").is_err(),
@@ -205,9 +321,9 @@ fn unknown_outcome(new_store: NewStore<'_>) -> Result<(), String> {
     )
 }
 
-fn delete_and_rename(new_store: NewStore<'_>) -> Result<(), String> {
-    let host = new_store();
-    let (mut store, _) = fresh(Arc::clone(&host))?;
+fn delete_and_rename(new_host: NewHost<'_>) -> Result<(), String> {
+    let (host, own) = new_host();
+    let (mut store, _) = fresh(Arc::clone(&host), &own)?;
     add(&mut store, "conformance/one").map_err(fail)?;
     add(&mut store, "conformance/two").map_err(fail)?;
     store
@@ -237,9 +353,9 @@ fn delete_and_rename(new_store: NewStore<'_>) -> Result<(), String> {
     )
 }
 
-fn policies(new_store: NewStore<'_>) -> Result<(), String> {
-    let host = new_store();
-    let (mut store, seal) = fresh(Arc::clone(&host))?;
+fn policies(new_host: NewHost<'_>) -> Result<(), String> {
+    let (host, own) = new_host();
+    let (mut store, seal) = fresh(Arc::clone(&host), &own)?;
     let mut pol = NamedPolicy::new("conformance");
     pol.history = 3;
     store.put_policy(pol.clone()).map_err(fail)?;
@@ -262,9 +378,9 @@ fn policies(new_store: NewStore<'_>) -> Result<(), String> {
     )
 }
 
-fn broken_seals(new_store: NewStore<'_>) -> Result<(), String> {
-    let good = new_store();
-    let (mut store, seal) = fresh(Arc::clone(&good))?;
+fn broken_seals(new_host: NewHost<'_>) -> Result<(), String> {
+    let (good, good_own) = new_host();
+    let (mut store, seal) = fresh(Arc::clone(&good), &good_own)?;
     add(&mut store, "conformance/one").map_err(fail)?;
     add(&mut store, "conformance/two").map_err(fail)?;
     let loaded = good.load().map_err(fail)?;
@@ -287,7 +403,7 @@ fn broken_seals(new_store: NewStore<'_>) -> Result<(), String> {
         ("a swapped record", two),
         ("a header naming another checksum", other_mac),
     ] {
-        let host = new_store();
+        let (host, own) = new_host();
         let mut batch = RealmBatch {
             realm: loaded.realm.clone(),
             ..RealmBatch::default()
@@ -300,7 +416,13 @@ fn broken_seals(new_store: NewStore<'_>) -> Result<(), String> {
             };
             batch.upsert_principals.push(plain_row(&p.name, record));
         }
-        host.commit(batch).map_err(fail)?;
+        own(HostChange {
+            intent: WriteIntent::new(Operation::Bootstrap, Caller::Embedder),
+            rows: Vec::new(),
+            prepared: None,
+            batch,
+        })
+        .map_err(fail)?;
         let opened = PrincipalStore::open_host(host, REALM, seal.clone());
         ensure(
             matches!(opened, Err(Error::Record(_))),
@@ -326,13 +448,17 @@ fn plain_row(name: &str, record: Vec<u8>) -> PrincipalRow {
     }
 }
 
-fn commits_once(new_store: NewStore<'_>) -> Result<(), String> {
-    let host = new_store();
-    let (mut store, _) = fresh(host)?;
+fn commits_once(new_host: NewHost<'_>) -> Result<(), String> {
+    let (host, own) = new_host();
+    let (mut store, _) = fresh(host, &own)?;
     let calls = AtomicUsize::new(0);
-    let count = |b: RealmBatch| {
+    let count = |c: HostChange| {
         calls.fetch_add(1, Ordering::SeqCst);
-        ensure(b.is_empty(), "a change of nothing sent rows").map_err(KerberosStoreError::Failed)
+        ensure(
+            c.batch.is_empty() && c.rows.is_empty() && c.intent.operation == Operation::Embedded,
+            "a change of nothing sent rows",
+        )
+        .map_err(KerberosStoreError::Failed)
     };
     store
         .change_committing(count, |_| Ok::<(), Error>(()))
@@ -342,7 +468,7 @@ fn commits_once(new_store: NewStore<'_>) -> Result<(), String> {
         calls.load(Ordering::SeqCst) == 1,
         "commit was not called once",
     )?;
-    let never = |_: RealmBatch| -> Result<(), KerberosStoreError> {
+    let never = |_: HostChange| -> Result<(), KerberosStoreError> {
         Err(KerberosStoreError::Failed(
             "called after a failed change".to_owned(),
         ))
@@ -354,12 +480,303 @@ fn commits_once(new_store: NewStore<'_>) -> Result<(), String> {
     )
 }
 
-fn outside_change(new_store: NewStore<'_>) -> Result<(), String> {
-    let (mut store, _) = fresh(new_store())?;
+fn outside_change(new_host: NewHost<'_>) -> Result<(), String> {
+    let (host, own) = new_host();
+    let (mut store, _) = fresh(host, &own)?;
     let out = store.insert_new_randkey(&name("conformance/one"), REALM, &[], ACTOR);
     ensure(out.is_err(), "a write outside a change was taken")?;
     ensure(
         store.get("conformance/one@CONFORMANCE.TEST").is_none(),
         "memory kept it",
+    )
+}
+
+#[expect(clippy::panic, reason = "the row arms the store's panic guard")]
+fn panics_restore(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    host.arm(Fault::Panic);
+    ensure(
+        matches!(
+            add(&mut store, "conformance/one"),
+            Err(Error::Host(KerberosStoreError::Failed(_)))
+        ),
+        "a panic in the commit was not a failed commit",
+    )?;
+    ensure(
+        store.get("conformance/one@CONFORMANCE.TEST").is_none(),
+        "memory kept a change whose commit panicked",
+    )?;
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.change(|s| -> Result<(), Error> {
+            s.insert_new_randkey(&name("conformance/two"), REALM, &[], ACTOR)?;
+            panic!("conformance: the change panics")
+        })
+    }));
+    ensure(panicked.is_err(), "the change's panic was swallowed")?;
+    ensure(
+        store.get("conformance/two@CONFORMANCE.TEST").is_none(),
+        "memory kept a change that panicked",
+    )?;
+    add(&mut store, "conformance/three").map_err(fail)?;
+    ensure(
+        host_has(host.as_ref(), "conformance/three")?
+            && !host_has(host.as_ref(), "conformance/two")?,
+        "the host is not what memory says",
+    )
+}
+
+fn with_history_policy(store: &mut PrincipalStore, who: &str) -> Result<(), String> {
+    let mut pol = NamedPolicy::new("conformance");
+    pol.history = 2;
+    store.put_policy(pol).map_err(fail)?;
+    add(store, who).map_err(fail)?;
+    store
+        .change(|s| {
+            s.set_principal_policy_in(&name(who), REALM, Some("conformance".to_owned()), ACTOR)
+        })
+        .map_err(fail)?
+        .map_err(fail)
+}
+
+fn set_password(store: &mut PrincipalStore, who: &str) -> Result<(), Error> {
+    store.change(|s| s.set_password_keepold_n_in(&name(who), REALM, b"conformance-pw", 0, ACTOR))?
+}
+
+fn history_in_the_change(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    with_history_policy(&mut store, "conformance/one")?;
+    host.commits();
+    set_password(&mut store, "conformance/one").map_err(fail)?;
+    let commits = host.commits();
+    ensure(
+        commits.len() == 1,
+        "the password change took more than one commit",
+    )?;
+    ensure(
+        commits[0].iter().any(|n| n == "kadmin/history")
+            && commits[0].iter().any(|n| n == "conformance/one"),
+        "kadmin/history and the password were not in one commit",
+    )
+}
+
+fn history_rolls_back(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    with_history_policy(&mut store, "conformance/one")?;
+    host.arm(Fault::Refuse);
+    ensure(
+        set_password(&mut store, "conformance/one").is_err(),
+        "a refused change was acknowledged",
+    )?;
+    ensure(
+        store.get("kadmin/history@CONFORMANCE.TEST").is_none()
+            && !host_has(host.as_ref(), "kadmin/history")?,
+        "a refused change left kadmin/history",
+    )
+}
+
+fn the_row(seen: &[Seen], id: &str) -> Option<(u32, bool)> {
+    let (_, _, rows) = seen.last()?;
+    rows.iter()
+        .find(|(rid, _, _)| rid == id)
+        .map(|(_, mask, owned)| (*mask, *owned))
+}
+
+fn rows_and_masks(new_host: NewHost<'_>) -> Result<(), String> {
+    use crate::store::kadm5_mask as m;
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    host.seen();
+    add(&mut store, "conformance/one").map_err(fail)?;
+    let one = "conformance/one@CONFORMANCE.TEST";
+    let seen = host.seen();
+    ensure(
+        seen.last().is_some_and(|s| s.0 == Operation::Unspecified),
+        "an undeclared change did not say Unspecified",
+    )?;
+    ensure(
+        the_row(&seen, one).is_some_and(|(mask, _)| mask == m::PRINCIPAL),
+        "a create's row is not PRINCIPAL",
+    )?;
+    store
+        .change(|s| {
+            s.apply_admin_fields_in(
+                &name("conformance/one"),
+                REALM,
+                crate::store::AdminFields {
+                    max_life: Some(4321),
+                    ..crate::store::AdminFields::default()
+                },
+                ACTOR,
+            )
+        })
+        .map_err(fail)?
+        .map_err(fail)?;
+    let mask = the_row(&host.seen(), one).ok_or("no row for a modify")?.0;
+    ensure(
+        mask & m::MAX_LIFE != 0 && mask & !(m::MAX_LIFE | m::MOD_TIME | m::MOD_NAME) == 0,
+        &format!("a max-life modify showed mask {mask:#x}"),
+    )?;
+    store
+        .change(|s| s.remove_in(&name("conformance/one"), REALM))
+        .map_err(fail)?
+        .map_err(fail)?;
+    ensure(
+        the_row(&host.seen(), one).is_some_and(|(mask, _)| mask == m::PRINCIPAL),
+        "a delete's row is not PRINCIPAL",
+    )
+}
+
+fn declared_intent(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    host.seen();
+    let caller = Caller::Local {
+        principal: ACTOR.to_owned(),
+    };
+    store
+        .change_as(
+            WriteIntent::new(Operation::Create, caller.clone()),
+            None,
+            |s| s.insert_new_randkey(&name("conformance/one"), REALM, &[], ACTOR),
+        )
+        .map_err(fail)?
+        .map_err(fail)?;
+    ensure(
+        host.seen()
+            .last()
+            .is_some_and(|s| s.0 == Operation::Create && s.1 == caller),
+        "the declared operation and caller did not reach the host",
+    )?;
+    store
+        .change_as(WriteIntent::new(Operation::Modify, caller), None, |_| {
+            Ok::<(), Error>(())
+        })
+        .map_err(fail)?
+        .map_err(fail)?;
+    ensure(
+        host.seen().is_empty(),
+        "a change that touched nothing reached the host",
+    )
+}
+
+fn denied_restores(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    host.arm(Fault::Deny);
+    let out = add(&mut store, "conformance/one");
+    ensure(
+        matches!(
+            out,
+            Err(Error::Host(KerberosStoreError::Denied(super::Denial { kadm5_code, .. })))
+                if kadm5_code == DENIED_CODE
+        ),
+        "a denial did not come back with its code",
+    )?;
+    ensure(
+        store.get("conformance/one@CONFORMANCE.TEST").is_none(),
+        "memory kept a denied change",
+    )?;
+    add(&mut store, "conformance/two").map_err(fail)?;
+    ensure(
+        host_has(host.as_ref(), "conformance/two")?,
+        "the next commit was lost",
+    )
+}
+
+fn host_mark(new_host: NewHost<'_>) -> Result<(), String> {
+    let host = faulty(new_host);
+    let (mut store, seal) = fresh(host.clone(), &host.own())?;
+    let who = name("conformance/one");
+    ensure(
+        store.set_host_owned_in(&who, REALM, true).is_err(),
+        "the mark was set outside a change",
+    )?;
+    let own = host.own();
+    store
+        .change_committing(
+            |c| own(c),
+            |s| {
+                s.insert_new_randkey(&who, REALM, &[], ACTOR)?;
+                s.set_host_owned_in(&who, REALM, true)
+            },
+        )
+        .map_err(fail)?
+        .map_err(fail)?;
+    let seen = host.seen();
+    ensure(
+        seen.last().is_some_and(|s| s.0 == Operation::Embedded)
+            && the_row(&seen, "conformance/one@CONFORMANCE.TEST").is_some_and(|(_, o)| o),
+        "the host's change did not show the mark",
+    )?;
+    let again = PrincipalStore::open_host(host, REALM, seal).map_err(fail)?;
+    ensure(
+        again
+            .get("conformance/one@CONFORMANCE.TEST")
+            .is_some_and(crate::store::Principal::host_owned),
+        "the mark did not survive a reload",
+    )
+}
+
+fn no_lockout_bits(new_host: NewHost<'_>) -> Result<(), String> {
+    use crate::store::kadm5_mask as m;
+    let host = faulty(new_host);
+    let (mut store, _) = fresh(host.clone(), &host.own())?;
+    add(&mut store, "conformance/one").map_err(fail)?;
+    host.seen();
+    store
+        .change(|s| s.clear_fail_auth_count_in(&name("conformance/one"), REALM, ACTOR))
+        .map_err(fail)?
+        .map_err(fail)?;
+    let mask = the_row(&host.seen(), "conformance/one@CONFORMANCE.TEST")
+        .ok_or("an unlock sent no row")?
+        .0;
+    ensure(
+        mask & (m::FAIL_AUTH_COUNT | m::LAST_SUCCESS | m::LAST_FAILED) == 0,
+        &format!("an unlock's row mask {mask:#x} has a lockout bit"),
+    )
+}
+
+fn bulk_refused(new_host: NewHost<'_>) -> Result<(), String> {
+    let (host, own) = new_host();
+    let (mut store, _) = fresh(host, &own)?;
+    ensure(
+        store.apply_updates(&[]).is_err(),
+        "iprop updates were taken into a host store",
+    )?;
+    let other = PrincipalStore::try_new(REALM).map_err(fail)?;
+    ensure(
+        crate::kdb_dump::update_store(&mut store, &other, &[]).is_err(),
+        "a dump load was taken into a host store",
+    )?;
+    let sid = store.domain_sid().clone();
+    ensure(
+        store.set_domain_sid(sid).is_err(),
+        "the domain SID was set outside a change",
+    )
+}
+
+fn empty_import(new_host: NewHost<'_>) -> Result<(), String> {
+    let mut built = PrincipalStore::try_new(REALM).map_err(fail)?;
+    let profile = ProfileSet::from_structs(REALM, Krb5Conf::default(), None);
+    let spec = RealmSpec {
+        realm: REALM,
+        profile: &profile,
+        mkvno: 1,
+        admin: None,
+    };
+    bootstrap_realm_into(&mut built, MasterKey::Random { etype: None }, &spec).map_err(fail)?;
+    add(&mut built, "conformance/one").map_err(fail)?;
+    let seal = built.host_seal_key().ok_or("no master key")?;
+    let text = crate::kdb_dump::dump_store_with_key(&built, &seal.key).map_err(fail)?;
+    let loaded = crate::kdb_dump::load_dump_with_key(&text, &seal.key).map_err(fail)?;
+    let (host, own) = new_host();
+    own(loaded.host_full_change().map_err(fail)?).map_err(fail)?;
+    let opened = PrincipalStore::open_host(host, REALM, seal).map_err(fail)?;
+    ensure(
+        opened.ids() == built.ids(),
+        "the imported realm has other principals",
     )
 }

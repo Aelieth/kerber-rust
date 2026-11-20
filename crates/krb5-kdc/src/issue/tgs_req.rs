@@ -1,5 +1,6 @@
 //! A TGS request: the header ticket, the server, and the reply.
 
+use crate::admission::TgsKind;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{
@@ -545,11 +546,10 @@ fn tgs_flags_times_policy<'a>(
         tkt_client_realm,
         local_tgt,
     } = c;
-    let subject_cname = stkt.as_ref().map_or(&enc_tkt.cname, |s| &s.part.cname);
-    let subject_crealm = if let Some(st) = stkt.as_ref() {
-        utf8_realm(&st.part.crealm)?
-    } else {
-        utf8_realm(&enc_tkt.crealm)?
+    let (subject_cname, subject_crealm) = match (&s4u_subject, stkt.as_ref()) {
+        (Some((user, realm)), _) if s4u2self => (user, realm.as_str()),
+        (_, Some(st)) => (&st.part.cname, utf8_realm(&st.part.crealm)?),
+        (_, None) => (&enc_tkt.cname, utf8_realm(&enc_tkt.crealm)?),
     };
     let s4u_user_local = s4u_local.is_some();
     let tgs_client = if s4u2self {
@@ -659,6 +659,35 @@ fn tgs_flags_times_policy<'a>(
     }
     if s4u2self && !s4u_referral {
         flags = s4u2self_forwardable(&server, flags);
+    }
+    if subject_crealm == store.realm() {
+        let kind = if s4u2self {
+            TgsKind::S4u2Self
+        } else if s4u2proxy {
+            TgsKind::S4u2Proxy
+        } else if renew {
+            TgsKind::Renew
+        } else if validate {
+            TgsKind::Validate
+        } else if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+            TgsKind::U2u
+        } else {
+            TgsKind::Normal
+        };
+        let fetched = match &tgs_client {
+            None => store.fetch_client(subject_cname).ok().flatten(),
+            Some(_) => None,
+        };
+        crate::admission::check_tgs_policy(
+            store,
+            body,
+            &server,
+            &enc_tkt,
+            subject_cname,
+            tgs_client.as_ref().or(fetched.as_ref()),
+            kind,
+            now.unix_seconds(),
+        )?;
     }
     enforce_kdcpolicy_tgs(
         store,

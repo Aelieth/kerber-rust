@@ -15,8 +15,8 @@
 
 use std::net::{TcpListener, UdpSocket};
 use std::process::exit;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -27,6 +27,8 @@ use krb5_config::{KadmindListen, KdcPaths, LogSpecs, ProfileSet};
 use krb5_log::klog::{self, Severity, os_error_text};
 
 mod auth_modules;
+#[cfg(feature = "test-hooks")]
+mod host_harness;
 mod write_load;
 
 /// The name used when `argv[0]` has none.
@@ -100,6 +102,15 @@ fn main() {
             &format!("{} while initializing context", e.init_text()),
         );
     });
+    #[cfg(feature = "test-hooks")]
+    let (mut store, harness) = match host_harness::open(&paths, &profile) {
+        Some(opened) => {
+            let (store, h) = opened.unwrap_or_else(|e| cannot_start(&progname, &e));
+            (store, Some(h))
+        }
+        None => (open_or_create(&progname, &paths, &profile), None),
+    };
+    #[cfg(not(feature = "test-hooks"))]
     let mut store = open_or_create(&progname, &paths, &profile);
     let load = match job {
         Job::Trust(trust) => {
@@ -131,6 +142,10 @@ fn main() {
         } => write_load,
     };
     let shared = krb5_kdc::shared_dump(store);
+    #[cfg(feature = "test-hooks")]
+    if let Some(h) = harness {
+        h.attach(&shared);
+    }
     let kdc_store: krb5_kdc::SharedStore = shared.clone();
     let (kdc_udp, kdc_tcp, kdc_limits) = bind_kdc(&progname, &profile);
 
@@ -142,10 +157,11 @@ fn main() {
 
     // Bind the listeners, then set up the admin service over the shared store — both here, in the
     // foreground, as the daemon does before it forks.
+    let profile = Arc::new(profile);
     let listeners = Listeners::bind(&listen, services, None, &TracingAdmin)
         .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing network")));
     let cfg = KadmindConfig {
-        profile: Arc::new(profile),
+        profile: Arc::clone(&profile),
         services,
         listen,
         limits: ServeLimits::default(),
@@ -159,6 +175,19 @@ fn main() {
     let load_store = shared.clone();
     let mut kadmind = Kadmind::new(shared, cfg)
         .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing")));
+    let preauth_lines = {
+        let mut g = load_store.write().unwrap_or_else(PoisonError::into_inner);
+        let pkinit_failure = g.init_pkinit(&profile);
+        krb5_kdc::preauth_startup_lines(&g.policy.kdcpreauth, pkinit_failure.as_deref())
+    };
+    for (level, line) in preauth_lines {
+        let severity = if level == "error" {
+            Severity::Err
+        } else {
+            Severity::Info
+        };
+        klog::syslog(severity, &line);
+    }
 
     // One `Shutdown`. SIGTERM and SIGINT set its flag, which the KDC loop polls. Kadmind waits on
     // the pipe, so a watcher calls `trigger` within 100 ms of the flag.

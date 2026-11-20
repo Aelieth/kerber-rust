@@ -56,6 +56,19 @@ pub(super) fn dispatch_iprop(
         IPROP_FULL_RESYNC_EXT => (UlogLast::default(), r.u32()?),
         _ => (UlogLast::default(), 0),
     };
+    let hosted = store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .has_host();
+    if proc != IPROP_NULL && hosted {
+        return Ok(
+            if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
+                encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_PERM_DENIED)
+            } else {
+                encode_incr_status(krb5_kdc::IPROP_PERM_DENIED)
+            },
+        );
+    }
     if proc != IPROP_NULL && !authcfg.stack().iprop(who.client) {
         return Ok(
             if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {

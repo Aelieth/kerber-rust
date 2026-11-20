@@ -270,21 +270,26 @@ fn kadm5_log_op_fields_match_mit_stubs() {
     assert_eq!(kadm5_op_name(INIT), None);
     let create = create_rec("newp1@KERBER.TEST", "pw");
     assert_eq!(
-        kadm5_prime_arg(CREATE_PRINCIPAL, &create, "admin@KERBER.TEST"),
+        kadm5_prime_arg(
+            CREATE_PRINCIPAL,
+            &create,
+            "admin@KERBER.TEST",
+            "KERBER.TEST"
+        ),
         "newp1@KERBER.TEST"
     );
     let mut pol = XdrW::default();
     pol.u32(API_V2);
     pol.nullstring(Some("gpol"));
     assert_eq!(
-        kadm5_prime_arg(GET_POLICY, &pol.b, "admin@KERBER.TEST"),
+        kadm5_prime_arg(GET_POLICY, &pol.b, "admin@KERBER.TEST", "KERBER.TEST"),
         "gpol"
     );
     let mut nopol = XdrW::default();
     nopol.u32(API_V2);
     nopol.nullstring(None);
-    assert_eq!(kadm5_prime_arg(GET_POLICY, &nopol.b, "a@R"), "(null)");
-    assert_eq!(kadm5_prime_arg(GET_POLS, &nopol.b, "a@R"), "*");
+    assert_eq!(kadm5_prime_arg(GET_POLICY, &nopol.b, "a@R", "R"), "(null)");
+    assert_eq!(kadm5_prime_arg(GET_POLS, &nopol.b, "a@R", "R"), "*");
 }
 
 fn test_master_key() -> ProtocolKey {

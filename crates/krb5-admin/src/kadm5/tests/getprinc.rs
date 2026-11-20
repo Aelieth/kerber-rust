@@ -68,3 +68,39 @@ fn getprinc_returns_documented_user_not_unk_princ() {
         }
     }
 }
+
+#[test]
+fn getprinc_hides_kerber_rusts_own_tl_types() {
+    let (store, acl, actor) = setup();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let tls: Vec<TlData> = [0x0700, 0x4B01, 0x4B02, 0x4B03, 0x4B04, 0x4B05]
+        .into_iter()
+        .map(|ty| TlData {
+            ty,
+            contents: b"f1".to_vec(),
+        })
+        .collect();
+    store
+        .write()
+        .unwrap()
+        .change(|s| s.merge_tl_data_in(&user, "KERBER.TEST", &tls, "test"))
+        .unwrap()
+        .unwrap();
+    let types = get_tl_types(&store, &acl, &actor, "user@KERBER.TEST");
+    assert!(types.contains(&0x0700), "{types:x?}");
+    assert!(
+        !types.iter().any(|&t| (0x4B01..=0x4B05).contains(&t)),
+        "{types:x?}"
+    );
+}
+
+#[test]
+fn an_unqualified_name_takes_the_configured_default_realm() {
+    let (store, acl, actor) = setup();
+    let args = getprinc_args("user");
+    let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &args).unwrap();
+    assert_eq!(ret_code(&out), 0);
+    store.write().unwrap().policy.default_realm = Some("OTHER.TEST".to_owned());
+    let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &args).unwrap();
+    assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+}

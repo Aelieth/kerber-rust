@@ -16,6 +16,43 @@ any other `###` heading.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-17
+
+### Added
+
+- **kdc.** `HostAdmission`: `check_as` before preauth, `as_notice` after the guard, `check_tgs`.
+- **kdc.** Host mark, TL 0x004B: `set_host_owned_in`; marked client with no module gets 18, logged once.
+- **kdc.** `KerberosStore::prepare` runs outside every lock; `Denied { kadm5_code, text }` reaches the client.
+- **admin.** kadmind with `test-hooks` loads a hook module that prints MIT's test hook lines.
+- **kdc.** `conformance::run_own`: the host rows over a host's own commit path.
+- **kdc.** `change_password_shared_committing_then`, `create_..._then`: `checks`, then `edit` in one change.
+- **kdc.** `load_dump_with_stash_path`: a migration load that reads the stash file itself.
+- **examples.** The embed example loads PKINIT as the daemon does; its `ctl` takes `delegate SERVICE TARGET`.
+
+### Changed
+
+- **kdc.** `commit` is now `commit_change(HostChange)`: intent, caller, rows with masks, `prepared`.
+- **admin.** kadmind and kpasswd declare writes with `change_as`; kpasswd maps `Denied` as MIT's switch.
+- **kdc.** Host stores refuse bulk loads and iprop; a marked principal's keys are not read out.
+- **kdc.** Host mode: `kadmin/history` joins the caller's change, so a refused change leaves none.
+- **kdc.** A host store's panic in a change or its commit restores the image from the journal.
+
+### Fixed
+
+- **kdc.** A host's failed first commit keeps its stash, marked; the next start retries with it or opens.
+- **kdc.** An AS raw crypto failure is sent as 60, as MIT's `errcode_to_protocol`.
+- **kdc.** A reply padata step's failure carries `KDC_RETURN_PADATA` as its e-text, as MIT's.
+- **kadm5.** Hooks fire as MIT: history create and chpass, modify's mask once; kadmind names alias targets.
+- **kadm5.** Precommit runs just before the put, a veto restores the row; bootstrap postcommit follows save.
+- **kadm5.** kadmind refuses tl-data 0x4B01-0x4B05 (kerber-rust's own) on create and modify; GET hides them.
+- **kdc.** KDC and kadmind KRB-ERRORs carry the server's microseconds, as MIT; kpasswd's stays 0, as MIT's.
+- **kadm5.** A kadm5 name without a realm takes `[libdefaults] default_realm`, else the served realm, as MIT.
+
+### Tests and CI
+
+- **field.** The run record hashes the harness's files only; a directory in `lib/` no longer fails it.
+- **admin.** An ignored oracle test sends an unqualified kadm5 name to a named kadmind.
+
 ## [1.2.2] - 2026-11-14
 
 ### Added
@@ -4744,7 +4781,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
 
-[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/Aelieth/kerber-rust/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Aelieth/kerber-rust/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Aelieth/kerber-rust/compare/v1.1.0...v1.2.0

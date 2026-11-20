@@ -351,6 +351,7 @@ pub(super) fn parse_chrand(
     Ok((princ, prealm, keepold, ks))
 }
 
+#[derive(Clone)]
 pub(super) struct ModFields {
     pub(super) expire: u32,
     pub(super) pw_expire: u32,
@@ -511,9 +512,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
         all_tl
             .iter()
             .rev()
-            .filter(|t| {
-                t.ty > 255 && t.ty != krb5_kdc::TL_KERBER_SID && t.ty != krb5_kdc::TL_KERBER_HIST
-            })
+            .filter(|t| t.ty > 255 && !krb5_kdc::tl_kerber_private(t.ty))
             .collect()
     };
     let n_tl = u32::try_from(tl.len()).unwrap_or(0);

@@ -16,7 +16,7 @@ memory-safe language without changing your clients, or you are building a produc
 library. **It is not for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or
 several realms in one KDC process: see [Limitations](#limitations).
 
-This is version **1.2.2**. You build it from source; it is not on crates.io and there is no package.
+This is version **1.2.3**. You build it from source; it is not on crates.io and there is no package.
 
 [Why it exists](#why-it-exists) · [What it can do](#what-it-can-do) · [Limitations](#limitations) ·
 [How it was tested](#how-it-was-tested) · [Download, install and use](#download-install-and-use) ·
@@ -34,10 +34,13 @@ Two things shaped it:
 - **It has to be a real replacement.** A new KDC is no use if every client and script has to change,
   so MIT 1.22.2 is the bar: the same commands, files and network behaviour, down to the log lines and
   error texts wherever they have been compared.
-- **It has to fit inside other software.** The goal is to become the KDC inside
-  [KLLDAP](https://github.com/Aelieth/klldap), replacing a wrapper around system MIT Kerberos. So the
-  KDC and `kadmind` also run as Rust libraries ([docs/embed](docs/embed/README.md)). That embedding
-  is the next step: today KLLDAP runs with `krb5-server` swapped for these programs.
+- **It has to fit inside other software.** kerber-rust is the KDC inside
+  [KLLDAP](https://github.com/Aelieth/klldap). Since KLLDAP 0.8.0 its KDC and `kadmind` run in
+  KLLDAP's process as Rust libraries ([docs/embed](docs/embed/README.md)), and the realm lives in
+  KLLDAP's own database. From 1.2.3 the host can own a directory user's principal: through the
+  [host contract](docs/embed/host-contract.md) it sees every write to that principal before it
+  commits, can change the password and the keys in one database transaction, and decides lockout
+  and admission at kinit.
 
 ## What it can do
 
@@ -75,7 +78,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
   accepts, such as a principal name that is not UTF-8.
-  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-122) lists what an operator could see, and
+  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-123) lists what an operator could see, and
   [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
   and nix contain `unsafe`, and `cargo vet` reports 18 crates fully audited and 134 exempted.
@@ -96,6 +99,12 @@ On Fedora that MIT is 1.22.2; on Debian 13 and Rocky Linux 10 it is the distribu
 its checks are graded as that version behaves. A *check* is one thing the harness looks at after a step,
 such as a command's exit code or output, a log line or a file's contents. It passes or fails, or it is
 only recorded (informational).
+
+**1.2.3's runs.** The 1.2.3 code runs this release's whole test list once, on the tagged commit,
+with MIT 1.22.2 first in each comparison: the 1.2.2 list in containers, on the lab machines (power
+cuts, the upgrade, an iprop replica) and in CI's `peers` job, plus the host contract's rows, and
+KLLDAP's acceptance on the same commit. The results record, docs/results/1.2.3.md, is added after
+the tag.
 
 **1.2.2's runs.** The 1.2.2 code ran this release's test list once, whole, in containers, on the lab
 machines and in CI, with MIT 1.22.2 first in each comparison:
@@ -137,7 +146,8 @@ Real software that ran against both MIT and kerber-rust, in those scenarios:
 - **NFS 4.2** to NFS-Ganesha with `sec=krb5i` and `krb5p`, through `rpc.gssd`.
 - **Keycloak** SPNEGO, from Java and from Windows.
 - **Windows 11**'s own Kerberos and SSPI.
-- **KLLDAP** with `krb5-server` swapped for kerber-rust.
+- **KLLDAP 0.8.0**, embedding kerber-rust 1.2.2: its acceptance record (gates on SQLite and
+  PostgreSQL, the MySQL and MariaDB lanes, power cuts).
 - **MIT's own** `kinit`, `klist`, `kvno`, `kadmin`, `kpasswd` and `kprop`, and Heimdal's client tools.
 
 Things to know when you read those numbers:
@@ -167,7 +177,7 @@ prerequisites on: [Rocky Linux](docs/install.md#rocky-linux),
 sudo dnf install -y git gcc make lld rustup krb5-workstation logrotate words
 rustup-init -y --default-toolchain none --profile minimal
 . "$HOME/.cargo/env"
-git clone --branch v1.2.2 https://github.com/Aelieth/kerber-rust.git
+git clone --branch v1.2.3 https://github.com/Aelieth/kerber-rust.git
 cd kerber-rust
 rustup toolchain install
 make build

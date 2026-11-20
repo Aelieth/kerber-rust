@@ -4,6 +4,7 @@ mod alias;
 mod flags;
 mod history;
 mod host_seam;
+pub use host_seam::declare_shared;
 mod iprop_ulog;
 pub(crate) mod iprop_xdr;
 mod kadm5_hook;
@@ -21,6 +22,7 @@ mod transit;
 mod tests;
 
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -51,13 +53,22 @@ pub mod kadm5_mask {
     pub const PRINCIPAL: u32 = 0x0000_0001;
     pub const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
     pub const PW_EXPIRATION: u32 = 0x0000_0004;
+    pub const LAST_PWD_CHANGE: u32 = 0x0000_0008;
     pub const ATTRIBUTES: u32 = 0x0000_0010;
     pub const MAX_LIFE: u32 = 0x0000_0020;
+    pub const MOD_TIME: u32 = 0x0000_0040;
+    pub const MOD_NAME: u32 = 0x0000_0080;
     pub const KVNO: u32 = 0x0000_0100;
+    pub const MKVNO: u32 = 0x0000_0200;
+    pub const AUX_ATTRIBUTES: u32 = 0x0000_0400;
     pub const POLICY: u32 = 0x0000_0800;
     pub const POLICY_CLR: u32 = 0x0000_1000;
     pub const MAX_RLIFE: u32 = 0x0000_2000;
+    pub const LAST_SUCCESS: u32 = 0x0000_4000;
+    pub const LAST_FAILED: u32 = 0x0000_8000;
+    pub const FAIL_AUTH_COUNT: u32 = 0x0001_0000;
     pub const KEY_DATA: u32 = 0x0002_0000;
+    pub const TL_DATA: u32 = 0x0004_0000;
 }
 
 #[derive(Clone, Debug)]
@@ -166,12 +177,6 @@ impl<'a> HeldSaves<'a> {
 impl Drop for HeldSaves<'_> {
     fn drop(&mut self) {
         self.0.saves_held = false;
-        if std::thread::panicking() {
-            self.0.db_stamp = None;
-            if let Some(h) = self.0.host.as_mut() {
-                h.reload_due = true;
-            }
-        }
     }
 }
 
@@ -513,10 +518,11 @@ impl PrincipalStore {
     }
 
     /// A put that must stick is written before the change can roll it back.
+    /// A host's rows stay in the change and commit with it.
     fn save_through(&mut self) -> Result<(), Error> {
         self.inside_change()?;
         if self.host.is_some() {
-            return self.host_commit_through();
+            return Ok(());
         }
         self.wrote_through.0.store(true, Ordering::Relaxed);
         self.logged_write(|| self.write_database())
@@ -566,20 +572,49 @@ impl PrincipalStore {
         if self.post.is_some() {
             return Ok(f(self));
         }
-        self.posted(|s| s.change_locked(f))
+        self.posted(|s| s.change_locked(None, f))
+    }
+
+    /// `change` that tells a host store what the write is and who asked for it.
+    pub fn change_as<T, E>(
+        &mut self,
+        intent: crate::host::WriteIntent,
+        prepared: Option<crate::host::HostPrepared>,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Error> {
+        if self.post.is_some() {
+            return Ok(f(self));
+        }
+        self.posted(|s| s.change_locked(Some((intent, prepared)), f))
     }
 
     fn posted<T, E>(
         &mut self,
         inner: impl FnOnce(&mut Self) -> Result<Result<T, E>, Error>,
     ) -> Result<Result<T, E>, Error> {
+        match self.defer_postcommit(|s| match inner(s) {
+            Ok(Ok(v)) => Ok(v),
+            failed => Err(failed),
+        }) {
+            Ok(v) => Ok(Ok(v)),
+            Err(failed) => failed,
+        }
+    }
+
+    /// Kadm5 postcommit calls made inside `f` run once it returns `Ok`.
+    pub fn defer_postcommit<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        if self.post.is_some() {
+            return f(self);
+        }
         let queue = PostQueue::new(self);
-        let out = inner(&mut *queue.0);
+        let out = f(&mut *queue.0);
         let calls = queue.0.post.take().unwrap_or_default();
         drop(queue);
-        let committed = matches!(out, Ok(Ok(_)));
         for call in calls {
-            if committed || call.always() {
+            if out.is_ok() || call.always() {
                 call.run(self);
             }
         }
@@ -596,13 +631,14 @@ impl PrincipalStore {
 
     fn change_locked<T, E>(
         &mut self,
+        declared: host_seam::Declared,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
         if self.saves_held {
             return Ok(f(self));
         }
         if self.host.is_some() {
-            return self.change_host(None::<host_seam::NoCommit>, f);
+            return self.change_host(None::<host_seam::NoCommit>, declared, f);
         }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(f(self));
@@ -617,70 +653,77 @@ impl PrincipalStore {
         self.wrote_through.0.store(false, Ordering::Relaxed);
         let before = Before::of(self);
         self.map.begin_change();
-        let done = {
-            let inside = HeldSaves::new(self);
-            f(&mut *inside.0)
-        };
         let log = self.log.clone();
-        let mut staged = None;
-        let out = match done {
-            Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
-                let append = self.append_plan(&before);
-                let mut appended = 0;
-                let written = self
-                    .prepare_log()
-                    .map_err(LoggedWrite::Before)
-                    .and_then(|p| {
-                        self.write_staged(log.as_deref(), p, || match &append {
-                            Some((ids, _, _)) if ids.is_empty() => Ok(()),
-                            Some((ids, master, at)) => {
-                                appended =
-                                    crate::persist::append_change(self, &db, master, *at, ids)?;
-                                lock.update_age();
-                                Ok(())
-                            }
-                            None => self.write_database().map_err(Error::from),
-                        })
-                    });
-                match written {
-                    Ok(batch) => {
-                        staged = batch;
-                        self.map.end_change();
-                        self.db_stamp = match (&append, &self.db_stamp) {
-                            (Some((ids, _, at)), Some(s)) => DbStamp::holding(
-                                &lock,
-                                &db,
-                                s.records + u64::try_from(ids.len()).unwrap_or_default(),
-                                at + appended,
-                            ),
-                            _ => DbStamp::now(&lock, &db, self.map.len_u64()),
-                        };
-                        tracing::debug!(
-                            event = krb5_log::events::ADMIN,
-                            component = "krb5-kdc",
-                            outcome = "ok",
-                            detail = "saved store",
-                            db = %db.display(),
-                        );
-                        Ok(Ok(v))
+        let ran = catch_unwind(AssertUnwindSafe(|| {
+            let done = {
+                let inside = HeldSaves::new(self);
+                f(&mut *inside.0)
+            };
+            let mut staged = None;
+            let out = match done {
+                Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
+                    let append = self.append_plan(&before);
+                    let mut appended = 0;
+                    let written = self
+                        .prepare_log()
+                        .map_err(LoggedWrite::Before)
+                        .and_then(|p| {
+                            self.write_staged(log.as_deref(), p, || match &append {
+                                Some((ids, _, _)) if ids.is_empty() => Ok(()),
+                                Some((ids, master, at)) => {
+                                    appended =
+                                        crate::persist::append_change(self, &db, master, *at, ids)?;
+                                    lock.update_age();
+                                    Ok(())
+                                }
+                                None => self.write_database().map_err(Error::from),
+                            })
+                        });
+                    match written {
+                        Ok(batch) => {
+                            staged = batch;
+                            self.map.end_change();
+                            self.db_stamp = match (&append, &self.db_stamp) {
+                                (Some((ids, _, at)), Some(s)) => DbStamp::holding(
+                                    &lock,
+                                    &db,
+                                    s.records + u64::try_from(ids.len()).unwrap_or_default(),
+                                    at + appended,
+                                ),
+                                _ => DbStamp::now(&lock, &db, self.map.len_u64()),
+                            };
+                            tracing::debug!(
+                                event = krb5_log::events::ADMIN,
+                                component = "krb5-kdc",
+                                outcome = "ok",
+                                detail = "saved store",
+                                db = %db.display(),
+                            );
+                            Ok(Ok(v))
+                        }
+                        Err(e) => {
+                            self.read_back(&lock);
+                            Err(e.into_error())
+                        }
                     }
-                    Err(e) => {
+                }
+                Ok(v) => {
+                    self.map.end_change();
+                    Ok(Ok(v))
+                }
+                Err(e) => {
+                    if self.wrote_through.0.load(Ordering::Relaxed) || !before.restore(self) {
                         self.read_back(&lock);
-                        Err(e.into_error())
                     }
+                    Ok(Err(e))
                 }
-            }
-            Ok(v) => {
-                self.map.end_change();
-                Ok(Ok(v))
-            }
-            Err(e) => {
-                if self.wrote_through.0.load(Ordering::Relaxed) || !before.restore(self) {
-                    self.read_back(&lock);
-                }
-                Ok(Err(e))
-            }
-        };
+            };
+            (out, staged)
+        }));
+        let (out, staged) = ran.unwrap_or_else(|panic| {
+            self.db_stamp = None;
+            resume_unwind(panic)
+        });
         drop(held);
         // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1002-1007)
         iprop_ulog::finish_staged(staged)?;
@@ -899,14 +942,15 @@ pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
 pub use keys::{KeyEntry, KeyLookup, KeySlot, KtkdbError, OpaqueKey, ktkdb_get_entry, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, PreparedPassword, S2K_ITERS,
-    apply_keysalt_policy, change_password_shared, change_password_shared_committing,
+    apply_keysalt_policy, change_password_shared, change_password_shared_as,
+    change_password_shared_committing, change_password_shared_committing_then,
 };
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{
-    AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, PreparedCreate, Principal,
-    PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared,
-    create_password_shared_committing, strip_db_args,
+    AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, ModifyPrincipal,
+    PreparedCreate, Principal, PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared,
+    create_password_shared_committing, create_password_shared_committing_then, strip_db_args,
 };
 pub(crate) use principal::{LoadedCt, db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};

@@ -12,6 +12,7 @@ use super::policy::NamedPolicy;
 use super::{PrincipalStore, kadm5_mask, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
+use crate::host::{Caller, Operation, WriteIntent};
 use crate::kdb_dump::{
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
@@ -20,6 +21,7 @@ use crate::listen::{SharedDump, read_fresh};
 use crate::lockout::{Lockout, LockoutUpdate};
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
+#[cfg(any(test, feature = "test-hooks"))]
 fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
     if from.contains('@') {
         from.to_owned()
@@ -182,6 +184,13 @@ pub(crate) struct PrincipalFields {
 }
 
 impl Principal {
+    #[must_use]
+    pub fn host_owned(&self) -> bool {
+        self.tl_data
+            .iter()
+            .any(|t| t.ty == crate::kdb_dump::TL_KERBER_HOST_OWNED)
+    }
+
     #[must_use]
     pub fn tl_with_s4u(&self) -> Vec<TlData> {
         let mut tl = self.tl_data.clone();
@@ -402,15 +411,27 @@ pub fn create_password_shared(
         }
     };
     let prepared = planned.map(CreatePlan::derive).transpose()?;
+    let (intent, token) = crate::declare_shared(store, Some((name, princ_realm)), |_| {
+        let mut intent = WriteIntent::new(Operation::Create, Caller::Embedder);
+        intent.requested = vec![name.unparse_with_realm_lossy(princ_realm)];
+        intent.client_mask = Some(ent.mask);
+        intent.password = Some(zeroize::Zeroizing::new(password.to_vec()));
+        intent
+    })?;
+    let mut token = Some(token);
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.reload_if_stale()?;
     if let Some(p) = prepared
-        && g.change(|s| s.create_prepared(p, actor))??
+        && g.change_as(intent.clone(), token.take().flatten(), |s| {
+            s.create_prepared(p, actor)
+        })??
     {
         return Ok(());
     }
     let keys = CreateKeys::Password(password);
-    g.change(|s| s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor))?
+    g.change_as(intent, token.take().flatten(), |s| {
+        s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
+    })?
 }
 
 #[expect(clippy::too_many_arguments, reason = "the create inputs")]
@@ -422,25 +443,61 @@ pub fn create_password_shared_committing(
     etypes: &[KeySalt],
     ent: &AdminEnt,
     actor: &str,
-    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
+) -> Result<(), Error> {
+    create_password_shared_committing_then(
+        store,
+        name,
+        princ_realm,
+        password,
+        etypes,
+        ent,
+        actor,
+        |_| Ok(()),
+        commit,
+        |_| Ok(()),
+    )
+}
+
+/// `checks` runs before the plan and before the create; `edit` once, after it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the create inputs, checks and the edit"
+)]
+pub fn create_password_shared_committing_then(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    etypes: &[KeySalt],
+    ent: &AdminEnt,
+    actor: &str,
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
+    edit: impl FnOnce(&mut PrincipalStore) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let planned = {
         let (g, read) = read_fresh(store);
-        match read {
-            Err(_) => None,
-            Ok(()) => Some(g.plan_create_password(name, princ_realm, password, etypes, ent)?),
+        if read.is_ok() {
+            checks(&g)?;
+            Some(g.plan_create_password(name, princ_realm, password, etypes, ent)?)
+        } else {
+            None
         }
     };
     let prepared = planned.map(CreatePlan::derive).transpose()?;
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.change_committing(commit, |s| {
-        if let Some(p) = prepared
-            && s.create_prepared(p, actor)?
-        {
-            return Ok(());
+        checks(s)?;
+        let created = match prepared {
+            Some(p) => s.create_prepared(p, actor)?,
+            None => false,
+        };
+        if !created {
+            let keys = CreateKeys::Password(password);
+            s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)?;
         }
-        let keys = CreateKeys::Password(password);
-        s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
+        edit(s)
     })?
 }
 
@@ -633,13 +690,20 @@ pub struct AdminFields {
     pub max_renewable_life: Option<u64>,
 }
 
+/// One kadm5 modify: `mask` is the client's, as the modify hook sees it.
+#[derive(Clone, Default)]
+pub struct ModifyPrincipal {
+    pub mask: u32,
+    pub fields: AdminFields,
+    pub kvno: Option<u32>,
+    pub tl_data: Vec<TlData>,
+    pub zero_fail_count: bool,
+}
+
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
         self.inside_change()?;
-        let (name, realm) = {
-            let principal = self.map.get(id).ok_or(Error::NotFound)?;
-            (principal.name.clone(), principal.realm.clone())
-        };
+        let (name, realm) = self.record_name(id)?;
         if realm == self.realm && name.components_joined_lossy() == "K/M" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
@@ -658,7 +722,7 @@ impl PrincipalStore {
         Ok(())
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
         let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
             return;
@@ -669,7 +733,7 @@ impl PrincipalStore {
         }
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
     /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
         let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
@@ -699,15 +763,6 @@ impl PrincipalStore {
         };
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
-    }
-
-    pub fn clear_s4u_to(&mut self, name: &PrincipalName) {
-        let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
-            return;
-        };
-        if let Some(p) = self.map.get_mut(&id) {
-            p.s4u_allowed_to.clear();
-        }
     }
 
     pub fn create_password(
@@ -1390,7 +1445,116 @@ impl PrincipalStore {
         fields: AdminFields,
         actor: &str,
     ) -> Result<(), Error> {
+        let mut mask = 0u32;
+        if fields.attributes.is_some() {
+            mask |= kadm5_mask::ATTRIBUTES;
+        }
+        if fields.max_life.is_some() {
+            mask |= kadm5_mask::MAX_LIFE;
+        }
+        if fields.expiration.is_some() {
+            mask |= kadm5_mask::PRINC_EXPIRE_TIME;
+        }
+        if fields.pw_expire.is_some() {
+            mask |= kadm5_mask::PW_EXPIRATION;
+        }
+        if fields.clear_policy {
+            mask |= kadm5_mask::POLICY_CLR;
+        } else if fields.policy.is_some() {
+            mask |= kadm5_mask::POLICY;
+        }
+        if fields.max_renewable_life.is_some() {
+            mask |= kadm5_mask::MAX_RLIFE;
+        }
+        self.modify_principal_in(
+            name,
+            princ_realm,
+            ModifyPrincipal {
+                mask,
+                fields,
+                ..ModifyPrincipal::default()
+            },
+            actor,
+        )
+    }
+
+    // MIT: `kadm5_modify_principal` (lib/kadm5/srv/svr_principal.c:552-690)
+    pub fn modify_principal_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        m: ModifyPrincipal,
+        actor: &str,
+    ) -> Result<(), Error> {
         self.inside_change()?;
+        let id = self.adb_id(name, princ_realm)?;
+        let saved = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
+        self.apply_admin_fields_at(&id, name, princ_realm, m.fields, actor)?;
+        if let Some(kvno) = m.kvno {
+            self.set_kvno_in(name, princ_realm, kvno, actor)?;
+        }
+        if !m.tl_data.is_empty() {
+            self.merge_tl_data_in(name, princ_realm, &m.tl_data, actor)?;
+        }
+        if m.zero_fail_count {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            p.fail_auth_count = 0;
+            stamp_admin_tl(p, false, actor);
+        }
+        self.precommit_or_restore(&id, saved, |s| {
+            super::kadm5_hook::hook_modify(
+                s,
+                super::kadm5_hook::HookStage::Precommit,
+                name,
+                princ_realm,
+                m.mask,
+            )
+        })?;
+        if m.zero_fail_count {
+            let snap = self.map.get(&id).cloned();
+            if let Some(p) = &snap {
+                self.zero_fail_count_in_file(p, unix_now_u32());
+            }
+            self.note_ulog(id, false, snap);
+            self.save_if_configured()?;
+        }
+        self.postcommit(super::kadm5_hook::Post::Modify {
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
+            mask: m.mask,
+        });
+        Ok(())
+    }
+
+    /// MIT's precommit runs after the edits, right before the put; a veto puts the row back.
+    pub(super) fn precommit_or_restore(
+        &mut self,
+        id: &str,
+        saved: Principal,
+        hook: impl FnOnce(&Self) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let vetoed = hook(self);
+        if vetoed.is_err()
+            && let Some(p) = self.map.get_mut(id)
+        {
+            *p = saved;
+        }
+        vetoed
+    }
+
+    pub(super) fn record_name(&self, id: &str) -> Result<(PrincipalName, String), Error> {
+        let p = self.map.get(id).ok_or(Error::NotFound)?;
+        Ok((p.name.clone(), p.realm.clone()))
+    }
+
+    fn apply_admin_fields_at(
+        &mut self,
+        id: &str,
+        name: &PrincipalName,
+        princ_realm: &str,
+        fields: AdminFields,
+        actor: &str,
+    ) -> Result<(), Error> {
         let AdminFields {
             attributes,
             max_life,
@@ -1400,38 +1564,9 @@ impl PrincipalStore {
             clear_policy,
             max_renewable_life,
         } = fields;
-        let id = self.adb_id(name, princ_realm)?;
-        let mut mask = 0u32;
-        if attributes.is_some() {
-            mask |= kadm5_mask::ATTRIBUTES;
-        }
-        if max_life.is_some() {
-            mask |= kadm5_mask::MAX_LIFE;
-        }
-        if expiration.is_some() {
-            mask |= kadm5_mask::PRINC_EXPIRE_TIME;
-        }
-        if pw_expire.is_some() {
-            mask |= kadm5_mask::PW_EXPIRATION;
-        }
-        if clear_policy {
-            mask |= kadm5_mask::POLICY_CLR;
-        } else if policy.is_some() {
-            mask |= kadm5_mask::POLICY;
-        }
-        if max_renewable_life.is_some() {
-            mask |= kadm5_mask::MAX_RLIFE;
-        }
-        super::kadm5_hook::hook_modify(
-            self,
-            super::kadm5_hook::HookStage::Precommit,
-            name,
-            princ_realm,
-            mask,
-        )?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {
-            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
             if let Some(a) = attributes {
                 p.attributes = a;
             }
@@ -1460,15 +1595,9 @@ impl PrincipalStore {
         if apply_max {
             self.apply_pw_max_life_in(name, princ_realm)?;
         }
-        let snap = self.map.get(&id).cloned();
-        self.note_ulog(id, false, snap);
-        self.save_if_configured()?;
-        self.postcommit(super::kadm5_hook::Post::Modify {
-            princ: name.clone(),
-            realm: princ_realm.to_owned(),
-            mask,
-        });
-        Ok(())
+        let snap = self.map.get(id).cloned();
+        self.note_ulog(id.to_owned(), false, snap);
+        self.save_if_configured()
     }
 
     pub fn impose_acl_restrictions(

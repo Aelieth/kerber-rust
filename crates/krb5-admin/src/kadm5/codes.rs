@@ -121,6 +121,7 @@ pub(super) const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 pub(super) const KADM5_PASS_Q_DICT: u32 = 43_787_544;
 pub(super) const KADM5_PASS_REUSE: u32 = 43_787_545;
 pub(super) const KADM5_PASS_TOOSOON: u32 = 43_787_546;
+pub(super) const KADM5_PASS_Q_GENERIC: u32 = 43_787_577;
 pub(super) const KADM5_AUTH_ADD: u32 = 43_787_522;
 pub(super) const KADM5_AUTH_MODIFY: u32 = 43_787_523;
 pub(super) const KADM5_AUTH_DELETE: u32 = 43_787_524;

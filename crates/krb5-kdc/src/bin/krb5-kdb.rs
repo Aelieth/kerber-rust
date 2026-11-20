@@ -553,19 +553,17 @@ fn kadm5_create(
         krb5_log::klog::close();
         return false;
     }
-    if let Err(e) = add_admin_principals(store, mkvno) {
-        util.com_err(&e.to_string(), "while creating principal");
-        krb5_log::klog::close();
-        return false;
-    }
-    #[cfg(feature = "test-hooks")]
-    if let Err(e) = hooks::seed(store) {
-        util.com_err(&e.to_string(), "while adding entries to the database");
-        krb5_log::klog::close();
-        return false;
-    }
-    if let Err(e) = save_store_with_master(store, db, master, DbWrite::InPlace) {
-        util.com_err(&persist_text(&e), "while adding entries to the database");
+    // MIT: `add_admin_princ` (kadmin/dbutil/kadm5_create.c:207-213)
+    let made = store.defer_postcommit(|store| {
+        add_admin_principals(store, mkvno)
+            .map_err(|e| (e.to_string(), "while creating principal"))?;
+        #[cfg(feature = "test-hooks")]
+        hooks::seed(store).map_err(|e| (e.to_string(), "while adding entries to the database"))?;
+        save_store_with_master(store, db, master, DbWrite::InPlace)
+            .map_err(|e| (persist_text(&e), "while adding entries to the database"))
+    });
+    if let Err((text, whence)) = made {
+        util.com_err(&text, whence);
         krb5_log::klog::close();
         return false;
     }
@@ -1152,7 +1150,10 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             Ok(Some(current)) => current,
             Ok(None) => {
                 let mut empty = PrincipalStore::new(loaded.realm());
-                empty.set_domain_sid(loaded.domain_sid().clone());
+                if let Err(e) = empty.set_domain_sid(loaded.domain_sid().clone()) {
+                    util.com_err(&e.to_string(), "while opening database");
+                    return 1;
+                }
                 empty
             }
             Err(e) => {

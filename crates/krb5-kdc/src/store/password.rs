@@ -16,6 +16,7 @@ use super::principal::{Principal, TlData, default_mod_actor, refresh_kadm_tl, st
 use super::{PrincipalStore, unix_now_u32};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
+use crate::host::{Caller, Operation, WriteIntent};
 use crate::kdb_dump::TL_LAST_PWD_CHANGE;
 use crate::listen::{SharedDump, read_fresh};
 
@@ -231,25 +232,65 @@ pub fn change_password_shared(
     etypes: &[KeySalt],
     checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let planned = {
+    let mut intent = WriteIntent::new(Operation::ChangePassword, Caller::Embedder);
+    intent.keepold = Some(keepold);
+    intent.password = Some(Zeroizing::new(password.to_vec()));
+    change_password_shared_as(
+        store,
+        intent,
+        (name, princ_realm),
+        password,
+        keepold,
+        actor,
+        etypes,
+        checks,
+    )
+}
+
+/// `change_password_shared` for a caller the host should know: the host prepares before the lock.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the chpass inputs and the caller"
+)]
+pub fn change_password_shared_as(
+    store: &SharedDump,
+    intent: WriteIntent,
+    (name, princ_realm): (&PrincipalName, &str),
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let (checked, planned) = {
         let (g, read) = read_fresh(store);
         match read {
-            Err(_) => Ok(None),
-            Ok(()) => {
-                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes))
-            }
+            Err(_) => (false, Ok(None)),
+            Ok(()) => (
+                true,
+                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes)),
+            ),
         }
     };
-    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose());
+    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose())?;
+    // The host prepares only for a change whose checks have passed.
+    let (intent, token) = if checked {
+        crate::declare_shared(store, Some((name, princ_realm)), |_| intent)?
+    } else {
+        (intent, None)
+    };
+    let mut token = Some(token);
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.reload_if_stale()?;
-    if let Some(p) = prepared?
-        && g.change(|s| s.apply_password(p, keepold, actor))??
+    if let Some(p) = prepared
+        && g.change_as(intent.clone(), token.take().flatten(), |s| {
+            s.apply_password(p, keepold, actor)
+        })??
     {
         return Ok(());
     }
     checks(&g)?;
-    g.change(|s| {
+    g.change_as(intent, token.take().flatten(), |s| {
         s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
     })?
 }
@@ -265,7 +306,35 @@ pub fn change_password_shared_committing(
     actor: &str,
     etypes: &[KeySalt],
     checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
-    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
+) -> Result<(), Error> {
+    change_password_shared_committing_then(
+        store,
+        name,
+        princ_realm,
+        password,
+        keepold,
+        actor,
+        etypes,
+        checks,
+        commit,
+        |_| Ok(()),
+    )
+}
+
+/// `edit` runs once, in the change, after the keys.
+#[expect(clippy::too_many_arguments, reason = "the chpass inputs and the edit")]
+pub fn change_password_shared_committing_then(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
+    edit: impl FnOnce(&mut PrincipalStore) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let planned = {
         let (g, read) = read_fresh(store);
@@ -280,13 +349,22 @@ pub fn change_password_shared_committing(
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     let prepared = prepared?;
     g.change_committing(commit, |s| {
-        if let Some(p) = prepared
-            && s.apply_password(p, keepold, actor)?
-        {
-            return Ok(());
+        let applied = match prepared {
+            Some(p) => s.apply_password(p, keepold, actor)?,
+            None => false,
+        };
+        if !applied {
+            checks(s)?;
+            s.set_password_etypes_keepold_n_in(
+                name,
+                princ_realm,
+                password,
+                keepold,
+                actor,
+                etypes,
+            )?;
         }
-        checks(s)?;
-        s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
+        edit(s)
     })?
 }
 
@@ -345,7 +423,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
         && *string_attrs == b.string_attrs
 }
 
-fn same_keys(a: &[KeyEntry], b: &[KeyEntry]) -> bool {
+pub(super) fn same_keys(a: &[KeyEntry], b: &[KeyEntry]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
             let KeyEntry {
@@ -443,7 +521,7 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         self.inside_change()?;
         let inputs = self.chpass_inputs(name, princ_realm, etypes)?;
-        // A refused password still leaves kadmin/history.
+        // A refused password still leaves a file store's kadmin/history.
         if inputs.policy.is_some() {
             self.ensure_history_principal(actor)?;
         }
@@ -597,20 +675,23 @@ impl PrincipalStore {
             None => None,
         };
         let etypes: Vec<EncryptionType> = keysalts.iter().map(|ks| ks.etype).collect();
-        super::kadm5_hook::hook_chpass(
-            self,
-            super::kadm5_hook::HookStage::Precommit,
-            &name,
-            &realm,
-            keepold,
-            Some(password.as_slice()),
-            &etypes,
-        )?;
+        let saved = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
         self.replace_password_keys(&id, keys, history, keepold, actor)?;
         if let Some(p) = self.map.get_mut(&id) {
             p.salt = crate::kdb_dump::salt_of_keys(&p.keys, &p.name, &p.realm);
         }
         self.apply_pw_max_life_in(&name, &realm)?;
+        self.precommit_or_restore(&id, saved, |s| {
+            super::kadm5_hook::hook_chpass(
+                s,
+                super::kadm5_hook::HookStage::Precommit,
+                &name,
+                &realm,
+                keepold,
+                Some(password.as_slice()),
+                &etypes,
+            )
+        })?;
         let snap = self.map.get(&id).cloned();
         if let Some(p) = &snap {
             self.zero_fail_count_in_file(p, unix_now_u32());

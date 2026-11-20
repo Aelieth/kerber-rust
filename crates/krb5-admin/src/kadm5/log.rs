@@ -186,7 +186,7 @@ fn trunc_name(s: &str) -> String {
 }
 
 // MIT: `stub_setup` (kadmin/server/server_stubs.c:289-292)
-pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
+pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str, defrealm: &str) -> String {
     let mut r = XdrR::new(args);
     if r.u32().is_err() {
         return client.to_owned();
@@ -198,7 +198,7 @@ pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
         | PURGEKEYS | GET_STRINGS | SET_STRING | EXTRACT_KEYS | RENAME_PRINCIPAL | CREATE_ALIAS => {
             r.principal_realm().map_or_else(
                 |_| client.to_owned(),
-                |(p, realm)| p.unparse_with_realm_lossy(&realm),
+                |(p, realm)| unparse(&p, &realm, defrealm),
             )
         }
         CREATE_POLICY | DELETE_POLICY | MODIFY_POLICY | GET_POLICY => r
@@ -215,14 +215,18 @@ pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
     }
 }
 
-fn rename_targets(args: &[u8]) -> Option<(String, String)> {
+fn unparse(p: &krb5_types::PrincipalName, realm: &str, defrealm: &str) -> String {
+    p.unparse_with_realm_lossy(if realm.is_empty() { defrealm } else { realm })
+}
+
+fn rename_targets(args: &[u8], defrealm: &str) -> Option<(String, String)> {
     let mut r = XdrR::new(args);
     r.u32().ok()?;
     let (src, src_realm) = r.principal_realm().ok()?;
     let (dst, dst_realm) = r.principal_realm().ok()?;
     Some((
-        src.unparse_with_realm_lossy(&src_realm),
-        dst.unparse_with_realm_lossy(&dst_realm),
+        unparse(&src, &src_realm, defrealm),
+        unparse(&dst, &dst_realm, defrealm),
     ))
 }
 
@@ -244,6 +248,7 @@ pub(super) fn kadm5_log_lines(
     who: &Caller<'_>,
     reply: &[u8],
     prefetch: bool,
+    defrealm: &str,
 ) -> Vec<String> {
     let code = reply
         .get(4..8)
@@ -273,7 +278,7 @@ pub(super) fn kadm5_log_lines(
         kadm5_error_text(code)
     };
     if proc == RENAME_PRINCIPAL {
-        let (src, dst) = rename_targets(args).unwrap_or_default();
+        let (src, dst) = rename_targets(args, defrealm).unwrap_or_default();
         let (src, dst) = (trunc_name(&src), trunc_name(&dst));
         // MIT: `rename_principal_2_svc` (kadmin/server/server_stubs.c:700-723)
         let refused = denied || code == KADM5_AUTH_DELETE;
@@ -290,7 +295,7 @@ pub(super) fn kadm5_log_lines(
         }
         return lines;
     }
-    let target = trunc_name(&kadm5_prime_arg(proc, args, who.client));
+    let target = trunc_name(&kadm5_prime_arg(proc, args, who.client, defrealm));
     if denied {
         vec![format!("Unauthorized request: {op}, {target}, {tail}")]
     } else {
@@ -305,9 +310,9 @@ pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
     }
 }
 
-pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8]) {
+pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8], defrealm: &str) {
     let prefetch = PREFETCH_FAILED.replace(false);
-    for line in kadm5_log_lines(proc, args, who, reply, prefetch) {
+    for line in kadm5_log_lines(proc, args, who, reply, prefetch, defrealm) {
         emit(&line);
     }
 }

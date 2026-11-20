@@ -1,5 +1,6 @@
 //! AS requests: the client lookup, preauth, and the reply.
 
+use crate::admission::Mechanism;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{
@@ -67,7 +68,9 @@ fn lookup_as_princ(
 }
 
 pub fn issue_as(store: &dyn PrincipalRead, req: &AsReq) -> Result<IssuedAs, Error> {
-    issue_as_from(store, req, None)
+    let out = issue_as_from(store, req, None);
+    crate::admission::deliver_notices();
+    out
 }
 
 pub(super) fn issue_as_from(
@@ -145,13 +148,25 @@ fn issue_as_body(
 ) -> Result<IssuedAs, Error> {
     let kdc_time = crate::store::unix_now_u32();
     let mut client = None;
+    crate::admission::begin_attempt();
     let out = issue_as_steps(store, req, raw, body, fast, kdc_time, &mut client);
     // Parked: no outcome yet; skip audit, since resume counts the attempt once.
     if crate::plugins::otp_park_pending() {
         return out;
     }
-    if let Some(client) = &client {
-        crate::lockout::lockout_audit(store, client, kdc_time, crate::lockout::as_outcome(&out));
+    match (&client, body.cname.as_ref()) {
+        (Some(client), Some(requested)) if client.host_owned() => {
+            crate::admission::queue_notice(store, client, requested, kdc_time, &out);
+        }
+        (Some(client), _) => {
+            crate::lockout::lockout_audit(
+                store,
+                client,
+                kdc_time,
+                crate::lockout::as_outcome(&out),
+            );
+        }
+        (None, _) => {}
     }
     out
 }
@@ -229,7 +244,7 @@ fn lookup_client(
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
     let local_tgt = get_local_tgt(store, &server)?;
     // MIT: `process_as_req` (do_as_req.c:630-630)
-    validate_as_request(store, &client, &server, body, kdc_time)?;
+    validate_as_request(store, (&client, &req_cname), &server, body, kdc_time, false)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
     let work_padata = if let Some(f) = fast {
         Some(f.inner_padata.clone())
@@ -363,6 +378,7 @@ fn finish_preauth(
         )
     })? {
         Some(PreauthAction::Pkinit { key, pa, signed }) => {
+            crate::admission::note_preauth_ok(Some(Mechanism::Pkinit));
             as_rep_key = Some(key);
             extra_padata.push(pa);
             skip_timestamp = true;
@@ -406,6 +422,7 @@ fn finish_preauth(
         Some(PreauthAction::Otp { key, indicators }) => {
             // MIT: `on_response` (plugins/preauth/otp/main.c:167-188)
             // MIT: `return_padata` (kdc/kdc_preauth.c:1470-1493)
+            crate::admission::note_preauth_ok(Some(Mechanism::Otp));
             as_rep_key = Some(key);
             skip_timestamp = true;
             for ind in &indicators {
@@ -415,6 +432,7 @@ fn finish_preauth(
         Some(PreauthAction::SpakeDone(k)) => {
             // MIT: `verify_response` (spake_kdc.c:464-464)
             // MIT: `replace_reply_key` (kdc_preauth.c:567-580)
+            crate::admission::note_preauth_ok(Some(Mechanism::Spake));
             as_rep_key = Some(k);
             skip_timestamp = true;
             for ind in &store.policy().spake_preauth_indicators {
@@ -422,6 +440,7 @@ fn finish_preauth(
             }
         }
         Some(PreauthAction::EncTsOk) => {
+            crate::admission::note_preauth_ok(Some(Mechanism::EncTimestamp));
             skip_timestamp = true;
         }
         None => {}
@@ -444,8 +463,12 @@ fn finish_preauth(
         };
         match verify_encrypted_challenge(store, &ckey.key, &f.armor_key, blob) {
             Ok(()) => {
+                crate::admission::note_preauth_ok(Some(Mechanism::EncChallenge));
                 skip_timestamp = true;
-                extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
+                extra_padata.push(
+                    kdc_encrypted_challenge(&f.armor_key, &ckey.key)
+                        .map_err(return_padata_failed)?,
+                );
                 if let Some(ai) = store.policy().encrypted_challenge_indicator.as_deref() {
                     authind_add(&mut auth_indicators, ai);
                 }
@@ -480,6 +503,7 @@ fn finish_preauth(
             detail: None,
         });
     }
+    crate::admission::note_passed_preauth();
     Ok(AsPreauth {
         client,
         cname,
@@ -541,7 +565,9 @@ fn finish_process_as_req(
     let mut session = random_key(session_etype)?;
     if anonymous_as {
         extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
-        session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")?;
+        // MIT: `return_pkinit_kx` (plugins/preauth/pkinit/pkinit_srv.c:647-651)
+        session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")
+            .map_err(|e| return_padata_failed(Error::from(e)))?;
     }
     // MIT: `process_as_req` (kdc/do_as_req.c:672-672)
     let now = KerberosTime::from_unix_seconds(kdc_time);
@@ -829,6 +855,20 @@ pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetS
 // MIT: `kdcpreauth_encrypted_challenge_initvt` (kdc/kdc_preauth_ec.c:219-219)
 const EC_MODULE: &str = "encrypted_challenge";
 
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:252-256)
+/// A reply padata step's failure goes out with that step's status.
+fn return_padata_failed(e: Error) -> Error {
+    match e {
+        Error::Protocol { code, detail, .. } => Error::Protocol {
+            code,
+            text: Some(status::KDC_RETURN_PADATA.to_owned()),
+            e_data: None,
+            detail,
+        },
+        other => proto_d(err::GENERIC, status::KDC_RETURN_PADATA, other.to_string()),
+    }
+}
+
 const ENOENT: i32 = 2;
 
 fn asn1_failure(der: &[u8], first_field_explicit: bool) -> Error {
@@ -1036,4 +1076,19 @@ fn pa_pkinit_kx(reply_key: &ProtocolKey, contrib: &ProtocolKey) -> Result<PaData
         padata_type: pa::PKINIT_KX,
         padata_value: encode(&enc)?.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_return_padata_failure_carries_its_steps_status() {
+        let out = return_padata_failed(Error::Crypto("encrypt failed".into()));
+        assert!(matches!(
+            out,
+            Error::Protocol { code: err::GENERIC, text: Some(ref t), .. }
+                if t == status::KDC_RETURN_PADATA
+        ));
+    }
 }

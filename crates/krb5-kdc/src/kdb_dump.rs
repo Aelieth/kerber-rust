@@ -63,9 +63,17 @@ pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 pub const TL_KERBER_HIST: i32 = 0x4B04;
 pub const TL_KERBER_RID_HWM: i32 = 0x4B05;
+
+/// kerber-rust's own record types, 0x4B01-0x4B05: no kadm5 client sets or reads them.
+#[must_use]
+pub fn tl_kerber_private(ty: i32) -> bool {
+    (TL_KERBER_SID..=TL_KERBER_RID_HWM).contains(&ty)
+}
 // MIT: `KRB5_TL_CONSTRAINED_DELEGATION_ACL` (include/kdb.h:271)
 pub const TL_CONSTRAINED_DELEGATION: i32 = 0x0400;
 pub const TL_KERBER_S4U_FROM: i32 = 0x4B06;
+/// Below 256, so kadmin can neither set nor read it.
+pub const TL_KERBER_HOST_OWNED: i32 = 0x004B;
 pub const SALTTYPE_NORMAL: i32 = 0;
 pub(crate) const SALTTYPE_NOREALM: i32 = 2;
 pub(crate) const SALTTYPE_ONLYREALM: i32 = 3;
@@ -260,7 +268,7 @@ impl DumpFile {
         }
         store.resolve_history_all();
         if let Some(sid) = domain {
-            store.set_domain_sid(sid);
+            store.put_domain_sid(sid);
         }
         if let Some(next) = hwm {
             store.raise_next_rid(next);
@@ -699,6 +707,7 @@ pub fn update_store(
     loaded: &PrincipalStore,
     order: &[&str],
 ) -> Result<(), KdcError> {
+    store.refuse_bulk_ingest()?;
     let mut put = std::collections::HashSet::new();
     for name in order {
         if let Some(p) = loaded.get_raw(name)

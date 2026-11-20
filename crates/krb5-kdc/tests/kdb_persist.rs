@@ -307,3 +307,33 @@ fn setstr_stamps_the_mod_actor() {
         "kdb_put_entry stamps current_caller (default_mod_actor without a handle)"
     );
 }
+
+#[test]
+fn a_dump_loads_the_same_from_its_stash_path_as_from_its_bytes() {
+    let dir = scratch_dir("krb5-stash-path");
+    let (db, stash) = (dir.join("principal"), dir.join("stash"));
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let bytes = std::fs::read(&stash).unwrap();
+    let mkey = krb5_protocol::Keytab::parse(&bytes).unwrap().entries[0]
+        .key
+        .clone();
+    let text = krb5_kdc::dump_store_with_key(&store, &mkey).unwrap();
+    let keys = |s: &krb5_kdc::PrincipalStore| -> Vec<(String, Vec<Vec<u8>>)> {
+        s.ids()
+            .into_iter()
+            .map(|id| {
+                let p = s.get_raw(&id).unwrap();
+                (
+                    id,
+                    p.keys.iter().map(|k| k.key.as_bytes().to_vec()).collect(),
+                )
+            })
+            .collect()
+    };
+    let by_bytes = krb5_kdc::load_dump_with_stash(&text, &bytes).unwrap();
+    let by_path = krb5_kdc::load_dump_with_stash_path(&text, &stash).unwrap();
+    assert!(store.ids().iter().all(|id| by_path.get_raw(id).is_some()));
+    assert_eq!(keys(&by_path), keys(&by_bytes));
+    let _ = std::fs::remove_dir_all(&dir);
+}

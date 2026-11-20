@@ -17,7 +17,7 @@ use super::codes::{
     RPCSEC_SEQ_WINDOW, RPG_CONTINUE, RPG_DATA, RPG_DESTROY, RPG_INIT, SETV4KEY_PRINCIPAL,
     SYSTEM_ERR,
 };
-use super::dispatch::kadm5_or_iprop;
+use super::dispatch::{default_realm, kadm5_or_iprop};
 use super::log::{
     Caller, kadm5_log_op, kadm5_service_name, rpc_log_bad_proc, rpc_log_bad_service,
     rpc_log_badauth, rpc_log_badverf, rpc_log_flavor_refused, rpc_log_miscerr,
@@ -340,7 +340,7 @@ fn rpcsec_dispatch(
         },
     );
     if !iprop {
-        kadm5_log_op(proc, kadm_args, &who, &result);
+        kadm5_log_op(proc, kadm_args, &who, &result, &default_realm(ctx.store));
     }
     match gd.svc {
         GSS_NONE => rpc_reply_gss_verf(xid, mic, &result),
@@ -744,7 +744,7 @@ pub(super) fn agss_dispatch(
             Err(_) => return rpc_reply_agss_status(xid, reply_verf, SYSTEM_ERR),
         },
     );
-    kadm5_log_op(proc, kadm_args, &who, &result);
+    kadm5_log_op(proc, kadm_args, &who, &result, &default_realm(ctx.store));
     agss_result(gctx, seq, xid, reply_verf, &result).unwrap_or_else(|| {
         crate::kadmind::admin_syslog(
             Severity::Err,

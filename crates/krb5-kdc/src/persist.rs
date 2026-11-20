@@ -1161,6 +1161,13 @@ pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, 
     Ok(dump.into_store(&mkey)?)
 }
 
+pub fn load_dump_with_stash_path(
+    text: &str,
+    stash_path: &Path,
+) -> Result<PrincipalStore, PersistError> {
+    load_dump_with_stash(text, &krb5_protocol::read_stash_file(stash_path)?)
+}
+
 fn load_kdb_blob(
     blob: &[u8],
     version: KdbVersion,
@@ -1372,7 +1379,7 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
                 "SID1 trailer is not valid SDDL: {sddl}"
             )));
         };
-        store.set_domain_sid(sid);
+        store.put_domain_sid(sid);
         let next = take_u32(plain, &mut i)?;
         let nrid = take_u32(plain, &mut i)?;
         for _ in 0..nrid {

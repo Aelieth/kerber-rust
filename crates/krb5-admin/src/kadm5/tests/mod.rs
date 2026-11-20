@@ -600,6 +600,53 @@ fn purgekeys_args(name: &str, keepkvno: i32) -> Vec<u8> {
     w.b
 }
 
+/// The tl-data types GET returns for `name`, every field asked for.
+fn get_tl_types(store: &SharedStore, acl: &Acl, actor: &str, name: &str) -> Vec<u32> {
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.nullstring(Some(name));
+    w.u32(u32::MAX);
+    let out = dispatch_kadm5(store, acl, actor, GET_PRINCIPAL, &w.b).unwrap();
+    assert_eq!(ret_code(&out), 0);
+    let mut r = XdrR::new(&out);
+    r.u32().unwrap();
+    r.u32().unwrap();
+    r.nullstring().unwrap();
+    for _ in 0..5 {
+        r.u32().unwrap();
+    }
+    r.nullstring().unwrap();
+    for _ in 0..4 {
+        r.u32().unwrap();
+    }
+    r.nullstring().unwrap();
+    for _ in 0..7 {
+        r.u32().unwrap();
+    }
+    let mut types = Vec::new();
+    if r.u32().unwrap() == 0 {
+        while r.u32().unwrap() != 0 {
+            types.push(r.u32().unwrap());
+            r.opaque().unwrap();
+        }
+    }
+    types
+}
+
+fn setkey3_args(name: &str, etype: i32, key: &[u8]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.nullstring(Some(name));
+    w.u32(0);
+    w.u32(1);
+    w.u32(u32::try_from(etype).unwrap());
+    w.u32(0);
+    w.u32(1);
+    w.u32(u32::try_from(etype).unwrap());
+    w.opaque(key);
+    w.b
+}
+
 fn setkey16_args(name: &str, etype: i32, key: &[u8]) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(API_V2);
@@ -690,6 +737,7 @@ mod changepw;
 mod framing;
 mod getprinc;
 mod glob;
+mod host;
 mod iprop;
 mod iprop_mit;
 mod keysalt;

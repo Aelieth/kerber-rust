@@ -136,3 +136,93 @@ fn stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr() {
     ss.nullstring(Some("v"));
     stub_unk_before_acl(SET_STRING, &ss.b, KADM5_AUTH_MODIFY);
 }
+
+/// Each hook call's operation, stage and principal.
+#[derive(Default)]
+struct Named(std::sync::Mutex<Vec<String>>);
+
+impl Named {
+    fn note(&self, op: &str, stage: krb5_kdc::HookStage, princ: &PrincipalName, realm: &str) {
+        let stage = match stage {
+            krb5_kdc::HookStage::Precommit => "pre",
+            krb5_kdc::HookStage::Postcommit => "post",
+        };
+        let line = format!("{op}:{stage}:{}", princ.unparse_with_realm_lossy(realm));
+        self.0.lock().unwrap().push(line);
+    }
+}
+
+impl krb5_kdc::Kadm5Hook for Named {
+    fn name(&self) -> &'static str {
+        "named"
+    }
+
+    fn chpass(
+        &self,
+        stage: krb5_kdc::HookStage,
+        princ: &PrincipalName,
+        realm: &str,
+        _keepold: u32,
+        _password: Option<&[u8]>,
+        _etypes: &[krb5_crypto::EncryptionType],
+    ) -> Result<(), krb5_kdc::Error> {
+        self.note("chpass", stage, princ, realm);
+        Ok(())
+    }
+
+    fn modify(
+        &self,
+        stage: krb5_kdc::HookStage,
+        princ: &PrincipalName,
+        realm: &str,
+        _mask: u32,
+    ) -> Result<(), krb5_kdc::Error> {
+        self.note("modify", stage, princ, realm);
+        Ok(())
+    }
+}
+
+#[test]
+fn kadmind_hooks_name_an_aliass_target() {
+    let (store, acl, actor) = setup();
+    let mut alias = XdrW::default();
+    alias.u32(API_V2);
+    alias.nullstring(Some("nick@KERBER.TEST"));
+    alias.nullstring(Some("user@KERBER.TEST"));
+    let out = dispatch_kadm5(&store, &acl, &actor, CREATE_ALIAS, &alias.b).unwrap();
+    assert_eq!(ret_code(&out), 0);
+    let module = std::sync::Arc::new(Named::default());
+    krb5_kdc::set_thread_kadm5_hook(vec![module.clone()]);
+    let mut chpass3 = XdrW::default();
+    chpass3.u32(API_V2);
+    chpass3.nullstring(Some("nick@KERBER.TEST"));
+    chpass3.u32(0);
+    chpass3.u32(0);
+    chpass3.nullstring(Some("another-password"));
+    let mut chrand3 = XdrW::default();
+    chrand3.u32(API_V2);
+    chrand3.nullstring(Some("nick@KERBER.TEST"));
+    chrand3.u32(0);
+    chrand3.u32(0);
+    for (proc, args) in [
+        (CHPASS_PRINCIPAL3, chpass3.b),
+        (CHRAND_PRINCIPAL3, chrand3.b),
+        (MODIFY_PRINCIPAL, modify_rec("nick@KERBER.TEST")),
+    ] {
+        let out = dispatch_kadm5(&store, &acl, &actor, proc, &args).unwrap();
+        assert_eq!(ret_code(&out), 0, "proc {proc}");
+    }
+    krb5_kdc::clear_thread_kadm5_hook();
+    let user = "user@KERBER.TEST";
+    assert_eq!(
+        *module.0.lock().unwrap(),
+        [
+            format!("chpass:pre:{user}"),
+            format!("chpass:post:{user}"),
+            format!("chpass:pre:{user}"),
+            format!("chpass:post:{user}"),
+            format!("modify:pre:{user}"),
+            format!("modify:post:{user}"),
+        ]
+    );
+}

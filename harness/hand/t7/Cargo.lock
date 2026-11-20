@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-brainpool"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-crypto"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "aes",
  "camellia",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-s2k"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "aes",
  "hmac",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-types"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "bp256",
  "bp384",

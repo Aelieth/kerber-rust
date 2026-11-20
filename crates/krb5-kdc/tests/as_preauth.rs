@@ -682,21 +682,16 @@ fn encts_under_a_non_permitted_etype_is_24_like_filter_preauth_error() {
     );
 }
 
-struct RawCodePolicy(i32);
+struct FailingPolicy(Error);
 
-impl KdcPolicy for RawCodePolicy {
+impl KdcPolicy for FailingPolicy {
     fn check_as(
         &self,
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
-        Err(Error::Protocol {
-            code: self.0,
-            text: Some("RAW_POLICY".into()),
-            e_data: None,
-            detail: None,
-        })
+        Err(self.0.clone())
     }
     fn check_tgs(
         &self,
@@ -709,11 +704,20 @@ impl KdcPolicy for RawCodePolicy {
 }
 
 fn wire_error_code(raw_policy_code: i32) -> i32 {
+    wire_code_after_preauth(Error::Protocol {
+        code: raw_policy_code,
+        text: Some("RAW_POLICY".into()),
+        e_data: None,
+        detail: None,
+    })
+}
+
+fn wire_code_after_preauth(failure: Error) -> i32 {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
         .policy
         .plugins
-        .set_policy(Arc::new(RawCodePolicy(raw_policy_code)));
+        .set_policy(Arc::new(FailingPolicy(failure)));
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = store
         .get_name(&user)
@@ -841,6 +845,14 @@ fn policy_raw_library_code_reaches_the_wire_as_generic_60() {
     assert_eq!(wire_error_code(-1_765_328_361), err::GENERIC);
     // Inside the protocol range it is passed through (`:697`).
     assert_eq!(wire_error_code(err::POLICY), err::POLICY);
+}
+
+#[test]
+fn post_preauth_crypto_failure_is_generic_60_not_preauth_failed() {
+    assert_eq!(
+        wire_code_after_preauth(Error::Crypto("encrypt failed".into())),
+        err::GENERIC
+    );
 }
 
 #[test]

@@ -56,6 +56,9 @@ pub enum Error {
     StashWithoutHostRealm {
         stash: std::path::PathBuf,
     },
+    BootstrapMarkerWithoutStash {
+        marker: std::path::PathBuf,
+    },
     LockoutMissing {
         path: std::path::PathBuf,
     },
@@ -111,6 +114,11 @@ impl fmt::Display for Error {
                 f,
                 "{}: a stash for no realm in the host store",
                 stash.display()
+            ),
+            Self::BootstrapMarkerWithoutStash { marker } => write!(
+                f,
+                "{}: a first start's marker whose stash is missing",
+                marker.display()
             ),
             Self::LockoutMissing { path } => write!(f, "{}: lockout file missing", path.display()),
             Self::LockoutUnreadable { path, text } => write!(f, "{}: {text}", path.display()),

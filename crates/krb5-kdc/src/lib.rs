@@ -6,6 +6,7 @@
 
 mod acl;
 mod ad;
+pub mod admission;
 mod asn1_text;
 mod audit;
 mod create;
@@ -79,12 +80,13 @@ pub use kdb::{
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpOkStage, DumpPrincipal, IpropHeaderError,
-    KDB_DUMP_VERSION, TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL,
-    TL_KERBER_SID, TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
-    conditional_iprop_dump, conditional_iprop_dump_fresh, dump_current_in_ulog, dump_ok_covers,
-    dump_ok_path, dump_store, dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key,
-    key_salt, load_dump, load_dump_etype, load_dump_path, load_dump_with_key, parse_dump,
-    parse_iprop_header, tl_mod_princ_name, update_store, write_dump_path_etype, write_dump_with_ok,
+    KDB_DUMP_VERSION, TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST,
+    TL_KERBER_HOST_OWNED, TL_KERBER_SERIAL, TL_KERBER_SID, TL_LAST_ADMIN_UNLOCK,
+    TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, conditional_iprop_dump,
+    conditional_iprop_dump_fresh, dump_current_in_ulog, dump_ok_covers, dump_ok_path, dump_store,
+    dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, key_salt, load_dump,
+    load_dump_etype, load_dump_path, load_dump_with_key, parse_dump, parse_iprop_header,
+    tl_kerber_private, tl_mod_princ_name, update_store, write_dump_path_etype, write_dump_with_ok,
 };
 #[cfg(feature = "test-hooks")]
 pub use listen::drop_privileges;
@@ -109,7 +111,7 @@ pub use osa::{
 pub use persist::{
     CreateError, DbUpdate, DbWrite, FullLoad, LoadError, LoadLog, PersistError, Unopenable,
     check_database, check_lockout_file, check_openable, create_store, load_dump_with_stash,
-    load_store, load_store_full, load_store_with_master, load_text_full,
+    load_dump_with_stash_path, load_store, load_store_full, load_store_with_master, load_text_full,
     read_db_and_lockout_locked, read_db_locked, read_stash, read_stashed_master, save_dump_text,
     save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys,
     write_stash,
@@ -147,12 +149,14 @@ pub use store::{
     KDB_DISALLOW_TGT_BASED, KDB_INUSE, KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED,
     KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
     KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, KDB_V1_BASE_LENGTH, Kadm5Hook, KadmData,
-    KeyEntry, KeyLookup, KeySlot, KtkdbError, MAX_ALIAS_DEPTH, NamedPolicy, OpaqueKey, PWQUAL_DICT,
-    PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, Policy, PreparedCreate, PreparedPassword, Principal,
-    PrincipalBuilder, PrincipalStore, Pwqual, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, SpakeKdc,
-    TlData, XDR_FAILURE, apply_keysalt_policy, change_password_shared,
-    change_password_shared_committing, clear_thread_kadm5_hook, clear_thread_pwqual,
-    create_password_shared, create_password_shared_committing, kadm5_mask, ktkdb_get_entry,
+    KeyEntry, KeyLookup, KeySlot, KtkdbError, MAX_ALIAS_DEPTH, ModifyPrincipal, NamedPolicy,
+    OpaqueKey, PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, Policy, PreparedCreate,
+    PreparedPassword, Principal, PrincipalBuilder, PrincipalStore, Pwqual, RID_FIRST_USER,
+    RID_KRBTGT, S2K_ITERS, SpakeKdc, TlData, XDR_FAILURE, apply_keysalt_policy,
+    change_password_shared, change_password_shared_as, change_password_shared_committing,
+    change_password_shared_committing_then, clear_thread_kadm5_hook, clear_thread_pwqual,
+    create_password_shared, create_password_shared_committing,
+    create_password_shared_committing_then, declare_shared, kadm5_mask, ktkdb_get_entry,
     random_key, register_kadm5_hook, register_pwqual, set_thread_kadm5_hook, set_thread_pwqual,
     strip_db_args,
 };
