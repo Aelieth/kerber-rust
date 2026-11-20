@@ -1,9 +1,11 @@
 [advisories]
 version = 2
 yanked = "deny"
-# No advisory is ignored. Adding one needs the RUSTSEC id, the reason, and a
-# row in docs/security.md.
-ignore = []
+# An ignore needs the RUSTSEC id, the reason, a row in docs/security.md, and the
+# same id in .cargo/audit.toml, which is the only list cargo audit reads.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable, and has no fixed version; vendored rasn's time types are chrono types" },
+]
 
 [licenses]
 version = 2

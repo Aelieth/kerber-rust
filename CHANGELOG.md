@@ -16,6 +16,14 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Removed
+
+- **client.** `krb5-client` no longer depends on `chrono`, which nothing in it used.
+
+### Tests and CI
+
+- **ci.** cargo audit and cargo deny ignore RUSTSEC-2026-0543 (chrono unmaintained); see `docs/security.md`.
+
 ## [1.2.3] - 2026-11-17
 
 ### Added
