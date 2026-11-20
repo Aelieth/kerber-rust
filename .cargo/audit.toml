@@ -1,0 +1,3 @@
+# cargo audit reads its ignores here; deny.toml and docs/security.md give each one's reason.
+[advisories]
+ignore = ["RUSTSEC-2026-0543"]

@@ -29,7 +29,6 @@ name = "krb5-kswitch"
 path = "src/bin/krb5-kswitch.rs"
 
 [dependencies]
-chrono.workspace = true
 krb5-asn1.workspace = true
 krb5-cli.workspace = true
 krb5-config.workspace = true

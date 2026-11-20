@@ -68,6 +68,14 @@ The other known differences laxer than MIT 1.22.2 are deliberate rows in [mit-de
 
 Settled since: a `dict_file` that `fstat` sizes at 0 bytes but never ends, such as `/dev/zero`, gives an empty dictionary on both sides, read as MIT's `init_dict` reads it (`st_size` bytes); kadmind starts and accepts a dictionary word (settled live beside MIT 1.22.2). A FIFO with a writer is that same empty dictionary (`st_size` 0); one with no writer blocks in `open` on both sides. A NUL inside a line ends that word and shifts the words after it. `strcasecmp` folds ISO-8859-1 letters when `LC_ALL`, else `LC_CTYPE`, else `LANG`, names that codeset, and only ASCII otherwise.
 
+## Ignored advisories
+
+`deny.toml` and `.cargo/audit.toml` ignore these. cargo deny warns about an ignore that no longer matches.
+
+| Advisory | Crate | What it means here | Leaves when |
+| --- | --- | --- | --- |
+| RUSTSEC-2026-0543 | chrono 0.4 | Unmaintained, not a vulnerability; no fixed version exists. chrono does `KerberosTime`'s UTC arithmetic and the local-time reads for kadmin dates, printed times and logs, and the vendored `rasn`'s time types are chrono types. That code does not change while the advisory is ignored. | The vendored `rasn` moves to a release with its own time types (librasn/rasn#598) and our crates move off chrono. |
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry
