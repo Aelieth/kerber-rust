@@ -227,6 +227,21 @@ criteria = "safe-to-deploy"
 version = "1.0.18"
 criteria = "safe-to-deploy"
 
+[[exemptions.jiff]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Local time in krb5-types timestamp.rs: each instant's offset, isdst and zone abbreviation, read as glibc reads TZ; exempted, unaudited."
+
+[[exemptions.jiff-core]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "jiff's core types, compiled with jiff; exempted, unaudited."
+
+[[exemptions.jiff-static]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "In the lock only: jiff names it under cfg(any()), so it is never compiled."
+
 [[exemptions.js-sys]]
 version = "0.3.99"
 criteria = "safe-to-deploy"
@@ -306,6 +321,16 @@ criteria = "safe-to-deploy"
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
+
+[[exemptions.portable-atomic]]
+version = "1.15.0"
+criteria = "safe-to-deploy"
+notes = "In the lock only: jiff uses it on targets without pointer-width atomics, none of ours."
+
+[[exemptions.portable-atomic-util]]
+version = "0.2.8"
+criteria = "safe-to-deploy"
+notes = "In the lock only: as portable-atomic."
 
 [[exemptions.primefield]]
 version = "0.14.0"
