@@ -23,6 +23,7 @@ any other `###` heading.
 ### Tests and CI
 
 - **ci.** cargo audit and cargo deny ignore RUSTSEC-2026-0543 (chrono unmaintained); see `docs/security.md`.
+- **field.** The /tmp guard survives absent trees and vanishing names; any other scan error fails it.
 
 ## [1.2.3] - 2026-11-17
 

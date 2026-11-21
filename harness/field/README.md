@@ -231,9 +231,14 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
   - Every run leaves `/tmp/claude-<uid>` and `/tmp/grok-file-lock-<uid>` out
     of that check and counts both on the `post.host.tmp` line. Those trees are
     CLI scratch for this user, written whether or not that CLI is driving the
-    run. The browser's top-level Chromium names (`.org.chromium.Chromium.*`,
+    run; either may be absent (after a reboot), and the line says so. The
+    browser's top-level Chromium names (`.org.chromium.Chromium.*`,
     `org.chromium.Chromium.*`, `scoped_dir*`) and GIMP's (`gimp-*`) are left out too, and counted
     and listed on that line. Any other new path still fails the guard.
+  - The guard is `lib/tmp-guard.sh`. Other users' directories this user cannot
+    search are skipped. A name that vanishes mid-scan is not an error; any other
+    scan error fails the guard (`new in /tmp: unknown`). `lib/tmp-guard-check.sh
+    SCRATCH` checks it on scratch roots, plus one read-only pass over `/tmp`.
 - **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
   and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
   left of the scenario's time. A command over its limit is stopped and fails
@@ -297,6 +302,7 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
 | `client-opens.sh`, `profile-opens.sh` | `kdc-profile`'s cells: how often each program opens each profile file. |
 | `embed-otp-guest.py`, `embed-otp-stub.py` | `embed-otp`'s driver on the kdc VM, and the RADIUS stub for its MIT leg. |
 | `scan-secrets.py` | Every one of those values in every file of a run, in UTF-8 and UTF-16-LE (keytab keys raw and as hex); a planted control first; a hit fails the run |
+| `tmp-guard.sh`, `tmp-guard-check.sh` | `run.sh`'s `post.host.tmp` guard (`tmp_guard MARK OUT [ROOT]`), and its check on scratch roots plus one read-only pass over `/tmp` (`tmp-guard-check.sh SCRATCH [SECS]`: the trees absent, a stray file, an unreadable directory, no mark, the real `/tmp`, churn). |
 | `journal-lines.py` | `journalctl -o json` records as MIT's FILE log lines (`Mon DD HH:MM:SS host prog[pid](severity): message`, MIT's severity names; `logger.c:58-66`, `:584-616`, `:661-672`), for `LOGSRC=journal` (Debian's family) |
 | `log-since.sh` | A log's mark (lines, bytes, inode, the head's sha256) and its text since the mark, through logrotate's rename; a mark no file holds fails the read. `rec.sh`'s `kdcmark`/`kdcsince`, `run.sh`'s log collector and the scenarios' own log marks send it to the VM on stdin |
 | `log-grade.py` | The log grader over a finished run's `logs/` (`run.sh --grade-logs`, a weekly's postflight): no panic in any line, no unread line holding an error, each `kdc.issue` correlated (counted per scenario), each `(Error)` line of ours in MIT's same scenario as a class, or in `log-grade.allow` (`prog`, ERE, reason, tab-separated; none yet); MIT's leg first |

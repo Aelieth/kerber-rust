@@ -14,9 +14,9 @@
 # every snapshot baseline.env names exists; no `lab.sh takeover` left over; `lab.sh check --lab-only` of the VMs the
 # selected scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and
 # from a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged,
-# nothing new in the host's /tmp owned by the user (/tmp/claude-<uid>, /tmp/grok-file-lock-<uid> and the desktop's
-# top-level Chromium and GIMP scratch names left out, counted), the secret scan of the whole run with its planted
-# control first.
+# nothing new in the host's /tmp owned by the user (lib/tmp-guard.sh: /tmp/claude-<uid>, /tmp/grok-file-lock-<uid>
+# and the desktop's top-level Chromium and GIMP scratch names left out, counted), the secret scan of the whole run
+# with its planted control first.
 # Any failure fails the run. A scenario that did not run is NOT-RUN, never green. Exit 0 only when every
 # selected scenario passed and every guard held.
 # Limits: a scenario has FIELD_SCENARIO_TIMEOUT seconds (default 1800; its commands are cut to what is left,
@@ -124,6 +124,8 @@ krb5_sums() {
 REC_DIR=$RUN/guards
 # shellcheck source=lib/rec.sh
 . "$HERE/lib/rec.sh"
+# shellcheck source=lib/tmp-guard.sh
+. "$HERE/lib/tmp-guard.sh"
 
 DONE=0 STOP='' SCEN='' RESULT=FAIL ALL_PASS=1 GUARDS_OK=0
 declare -a ROWS=()
@@ -183,8 +185,6 @@ takeovers_left() {
 }
 # postflight: the guards that hold whatever happened before them.
 postflight() {
-    local mark=$RUN/tmp/.start left='' grok_excl claude_excl desktop_left b
-    local -a prune names desktop_excl
     section "postflight"
     if [ -n "$ROLE_KDC" ]; then check post.release rc host "$LABQ release"; fi
     if [ -n "$ROLE_KDC2" ]; then check post.release.kdc2 rc host "$LABQ release kdc2"; fi
@@ -192,24 +192,7 @@ postflight() {
     krb5_sums > "$RUN/guards/krb5.conf.end"
     sides post.krb5.conf start "$RUN/guards/krb5.conf.start" end "$RUN/guards/krb5.conf.end" \
         && check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
-    # Both trees are CLI scratch for this user, written whether or not that CLI is driving the run;
-    # the desktop's Chromium and GIMP make the top-level names (scoped_dir* is Chromium's ScopedTempDir).
-    grok_excl="/tmp/grok-file-lock-$(id -u)"
-    claude_excl="/tmp/claude-$(id -u)"
-    desktop_excl=('.org.chromium.Chromium.*' 'org.chromium.Chromium.*' 'scoped_dir*' 'gimp-*')
-    prune=(-path "$grok_excl" -prune -o -path "$claude_excl" -prune -o)
-    names=()
-    for b in "${desktop_excl[@]}"; do
-        prune+=(-path "/tmp/$b" -prune -o)
-        names+=(-o -name "$b")
-    done
-    note "left out of the /tmp guard (and counted): $grok_excl $claude_excl /tmp/{${desktop_excl[*]}}"
-    left="; left out: $(find "$grok_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $grok_excl"
-    left+="; left out: $(find "$claude_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $claude_excl"
-    desktop_left=$(find /tmp -maxdepth 1 -xdev -user "$(id -un)" -newer "$mark" \( "${names[@]:1}" \) -printf '%f\n' 2>/dev/null | sort | paste -sd' ' -)
-    left+="; left out: $(wc -w <<< "$desktop_left") desktop scratch names${desktop_left:+: $desktop_left}"
-    find /tmp -xdev "${prune[@]}" -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
-    printf 'new in /tmp: %s%s\n' "$(grep -c . "$RUN/guards/host-tmp.txt" || true)" "$left" >> "$RUN/guards/host-tmp.txt"
+    note "$(tmp_guard "$RUN/tmp/.start" "$RUN/guards/host-tmp.txt")"
     check post.host.tmp '^new in /tmp: 0(;|$)' host "cat $(printf '%q' "$RUN/guards/host-tmp.txt")"
     if [ "$PROFILE" = weekly ] && [ "${#LEGS[@]}" = 2 ]; then
         check post.log.grade '^log-grade: PASS$' host "python3 -B $(printf '%q' "$FIELD_LIB/log-grade.py") $(printf '%q' "$RUN")"
