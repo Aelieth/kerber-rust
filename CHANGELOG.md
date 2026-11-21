@@ -16,6 +16,11 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **client/kdc.** `kinit -s` and `default_principal_expiration` read a wall time across DST as MIT does.
+- **admin.** `getprinc` dates print the zone's abbreviation (`CST`), as MIT does, not a UTC offset.
+
 ### Removed
 
 - **client.** `krb5-client` no longer depends on `chrono`, which nothing in it used.

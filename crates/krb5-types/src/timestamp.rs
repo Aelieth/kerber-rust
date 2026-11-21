@@ -2,7 +2,9 @@
 
 use std::sync::OnceLock;
 
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeDelta, TimeZone, Timelike};
+use jiff::civil::{Date, DateTime};
+use jiff::tz::{AmbiguousOffset, Offset, TimeZone};
+use jiff::{SignedDuration, Timestamp};
 
 mod locale;
 mod strftime;
@@ -28,27 +30,27 @@ pub fn lc_time() -> LcTime {
     LC_TIME.get().copied().unwrap_or(LcTime::C)
 }
 
+fn local_zone() -> TimeZone {
+    TimeZone::try_system().unwrap_or(TimeZone::UTC)
+}
+
 #[must_use]
 pub fn localtime(t: u32) -> Option<Tm> {
-    let utc = chrono::DateTime::from_timestamp(i64::from(t), 0)?;
-    let local = utc.with_timezone(&Local);
-    let gmtoff = local.offset().local_minus_utc();
-    let int = |v: u32| i32::try_from(v).unwrap_or_default();
+    let ts = Timestamp::from_second(i64::from(t)).ok()?;
+    let tz = local_zone();
+    let info = tz.to_offset_info(ts);
+    let dt = info.offset().to_datetime(ts);
     Some(Tm {
-        sec: int(local.second()),
-        min: int(local.minute()),
-        hour: int(local.hour()),
-        mday: int(local.day()),
-        mon: int(local.month0()),
-        year: local.year() - 1900,
-        wday: int(local.weekday().num_days_from_sunday()),
-        yday: int(local.ordinal0()),
-        gmtoff: i64::from(gmtoff),
-        zone: if gmtoff == 0 {
-            "UTC".to_owned()
-        } else {
-            local.offset().to_string()
-        },
+        sec: i32::from(dt.second()),
+        min: i32::from(dt.minute()),
+        hour: i32::from(dt.hour()),
+        mday: i32::from(dt.day()),
+        mon: i32::from(dt.month()) - 1,
+        year: i32::from(dt.year()) - 1900,
+        wday: i32::from(dt.weekday().to_sunday_zero_offset()),
+        yday: i32::from(dt.day_of_year()) - 1,
+        gmtoff: i64::from(info.offset().seconds()),
+        zone: info.abbreviation().to_owned(),
         epoch: i64::from(t),
     })
 }
@@ -59,14 +61,12 @@ pub fn strftime(fmt: &str, t: u32, maxsize: usize) -> Option<String> {
 }
 
 // MIT: `krb5_timestamp_to_string` (lib/krb5/krb/str_conv.c:199-213)
-// `%c` of the local time in a buffer of `buflen` bytes.
 #[must_use]
 pub fn timestamp_to_string(t: u32, buflen: usize) -> Option<String> {
     strftime("%c", t, buflen)
 }
 
 // MIT: `krb5_timestamp_to_sfstring` (lib/krb5/krb/str_conv.c:216-252)
-// The first format of MIT's table that fits in `buflen`.
 #[must_use]
 pub fn timestamp_to_sfstring(t: u32, buflen: usize, pad: Option<u8>) -> Option<String> {
     sfstring_tm(&lc_time(), &localtime(t)?, buflen, pad)
@@ -133,42 +133,77 @@ struct AtTm {
     hour: i64,
     min: i64,
     sec: i64,
+    isdst: bool,
 }
 
 impl AtTm {
-    fn at(now: NaiveDateTime) -> Self {
+    fn at(tz: &TimeZone, now: Timestamp) -> Self {
+        let info = tz.to_offset_info(now);
+        let dt = info.offset().to_datetime(now);
         Self {
-            year: i64::from(now.year()) - 1900,
-            mon: i64::from(now.month0()),
-            mday: i64::from(now.day()),
-            hour: i64::from(now.hour()),
-            min: i64::from(now.minute()),
-            sec: i64::from(now.second()),
+            year: i64::from(dt.year()) - 1900,
+            mon: i64::from(dt.month()) - 1,
+            mday: i64::from(dt.day()),
+            hour: i64::from(dt.hour()),
+            min: i64::from(dt.minute()),
+            sec: i64::from(dt.second()),
+            isdst: info.dst().is_dst(),
         }
     }
 
-    fn normalized(self) -> Option<NaiveDateTime> {
-        let year = i32::try_from(self.year + 1900).ok()?;
-        let mon = u32::try_from(self.mon).ok()?;
-        let first = NaiveDate::from_ymd_opt(year, mon + 1, 1)?.and_hms_opt(0, 0, 0)?;
-        let offset = TimeDelta::try_days(self.mday - 1)?
-            .checked_add(&TimeDelta::try_hours(self.hour)?)?
-            .checked_add(&TimeDelta::try_minutes(self.min)?)?
-            .checked_add(&TimeDelta::try_seconds(self.sec)?)?;
-        first.checked_add_signed(offset)
+    fn normalized(self) -> Option<DateTime> {
+        let year = i16::try_from(self.year + 1900).ok()?;
+        let mon = i8::try_from(self.mon + 1).ok()?;
+        let first = Date::new(year, mon, 1).ok()?.at(0, 0, 0, 0);
+        let secs = ((self.mday - 1) * 24 + self.hour) * 3600 + self.min * 60 + self.sec;
+        first.checked_add(SignedDuration::from_secs(secs)).ok()
     }
+}
+
+// glibc mktime, tm_isdst set (`__mktime_internal`); None is -1.
+fn mktime(tz: &TimeZone, dt: DateTime, isdst: bool) -> Option<i64> {
+    const STRIDE: i64 = 601_200;
+    const BOUND: i64 = 536_454_000 / 2 + STRIDE;
+    let dst = |t: Timestamp| tz.to_offset_info(t).dst().is_dst() == isdst;
+    let at = |o: Offset| o.to_timestamp(dt).ok();
+    let t = match tz.to_ambiguous_timestamp(dt).offset() {
+        AmbiguousOffset::Unambiguous { offset } => at(offset)?,
+        // `after` reads it before the change, `before` after it.
+        AmbiguousOffset::Gap { before, after } => {
+            let (tb, ta) = (at(before)?, at(after)?);
+            return match (dst(ta), dst(tb)) {
+                (true, false) => Some(tb.as_second()),
+                (false, true) => Some(ta.as_second()),
+                _ => None,
+            };
+        }
+        AmbiguousOffset::Fold { before, after } => {
+            let tb = at(before)?;
+            if dst(tb) { tb } else { at(after)? }
+        }
+    };
+    if dst(t) {
+        return Some(t.as_second());
+    }
+    (STRIDE..BOUND)
+        .step_by(601_200)
+        .flat_map(|d| [-d, d])
+        .filter_map(|d| Timestamp::from_second(t.as_second() + d).ok())
+        .find(|&ot| dst(ot))
+        .and_then(|ot| at(tz.to_offset_info(ot).offset()))
+        .map(Timestamp::as_second)
 }
 
 #[must_use]
 pub fn string_to_timestamp(s: &str) -> Option<u32> {
-    string_to_timestamp_at(s, Local::now().naive_local())
+    let tz = local_zone();
+    string_to_timestamp_at(s, &tz, AtTm::at(&tz, Timestamp::now()))
 }
 
-#[must_use]
-pub fn string_to_timestamp_at(s: &str, now: NaiveDateTime) -> Option<u32> {
+fn string_to_timestamp_at(s: &str, tz: &TimeZone, now: AtTm) -> Option<u32> {
     let b = s.as_bytes();
     for fmt in FORMATS {
-        let mut tm = AtTm::at(now);
+        let mut tm = now;
         let mut i = 0;
         if strptime(b, &mut i, fmt.as_bytes(), &mut tm).is_none() || i == 0 {
             continue;
@@ -179,15 +214,9 @@ pub fn string_to_timestamp_at(s: &str, now: NaiveDateTime) -> Option<u32> {
         if i != b.len() || tm.year <= 0 {
             continue;
         }
-        let Some(ndt) = tm.normalized() else {
-            continue;
-        };
-        let local = Local
-            .from_local_datetime(&ndt)
-            .earliest()
-            .or_else(|| Local.from_local_datetime(&ndt).latest());
-        if let Some(t) = local {
-            return Some(wrap_ts(t.timestamp()));
+        // MIT: `krb5_string_to_timestamp` (lib/krb5/krb/str_conv.c:188-190)
+        if let Some(t) = tm.normalized().and_then(|dt| mktime(tz, dt, tm.isdst)) {
+            return Some(wrap_ts(t));
         }
     }
     None

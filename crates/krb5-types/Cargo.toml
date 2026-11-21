@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 bytes.workspace = true
 chrono.workspace = true
+jiff.workspace = true
 pure-rust-locales.workspace = true
 crypto-bigint.workspace = true
 getrandom.workspace = true

@@ -11,8 +11,8 @@ from .common import ROOT, _die
 CHANGELOG_HEADINGS_ALLOW = 0
 DOCS_SIZE_ALLOW = 0
 DOCS_SIZE_LIMIT = 100 * 1024
-# The deviations ledger's own cap, raised for 1.2.2's rows.
-DOCS_SIZE_LIMIT_FOR = {"docs/mit-deviations.md": 104 * 1024}
+# The deviations ledger's own cap, raised for 1.2.2's rows and the DST parity row.
+DOCS_SIZE_LIMIT_FOR = {"docs/mit-deviations.md": 105 * 1024}
 CHANGELOG_UNRELEASED_MAX_BYTES = 25000
 
 _DOC_FILE_CITE_RE = re.compile(
