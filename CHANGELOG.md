@@ -22,6 +22,7 @@ any other `###` heading.
 - **admin.** `getprinc` dates print the zone's abbreviation (`CST`), as MIT does, not a UTC offset.
 - **admin/client.** `TZ` and zone files read as glibc reads them (`posixrules`, `TZDIR`), as MIT does.
 - **client/kdc.** Under a leap-second (`right/`) zone, times and KerberosTime count leap seconds, as MIT does.
+- **admin.** kpasswd's too-soon time prints in kadmind's local time, as MIT's `ctime` does, not UTC.
 
 ### Removed
 

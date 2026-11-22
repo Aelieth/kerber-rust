@@ -1,7 +1,5 @@
 //! MIT `get_date_rel` (`kadmin/cli/getdate.y`) and `kadmin.c`'s wrappers.
 
-use chrono::{Datelike as _, Offset as _, TimeZone as _, Timelike as _};
-
 const EPOCH: i64 = 1970;
 const EPOCH_END: i64 = 2106;
 const SECSPERDAY: i64 = 24 * 60 * 60;
@@ -586,33 +584,16 @@ struct Tm {
 }
 
 fn localtime(t: i64) -> Option<Tm> {
-    let utc = chrono::DateTime::from_timestamp(t, 0)?;
-    let local = utc.with_timezone(&chrono::Local);
-    let offset = local.offset().fix().local_minus_utc();
-    let standard = [1, 7]
-        .iter()
-        .filter_map(|&m| {
-            chrono::Utc
-                .with_ymd_and_hms(utc.year(), m, 1, 0, 0, 0)
-                .single()
-                .map(|d| {
-                    d.with_timezone(&chrono::Local)
-                        .offset()
-                        .fix()
-                        .local_minus_utc()
-                })
-        })
-        .min()
-        .unwrap_or(offset);
+    let (tm, isdst) = krb5_types::timestamp::localtime_steady(t)?;
     Some(Tm {
-        year: i64::from(local.year()) - 1900,
-        mon: i64::from(local.month0()),
-        mday: i64::from(local.day()),
-        hour: i64::from(local.hour()),
-        min: i64::from(local.minute()),
-        sec: i64::from(local.second()),
-        wday: i64::from(local.weekday().num_days_from_sunday()),
-        isdst: offset > standard,
+        year: i64::from(tm.year),
+        mon: i64::from(tm.mon),
+        mday: i64::from(tm.mday),
+        hour: i64::from(tm.hour),
+        min: i64::from(tm.min),
+        sec: i64::from(tm.sec),
+        wday: i64::from(tm.wday),
+        isdst,
     })
 }
 
@@ -724,15 +705,8 @@ fn relative_month(start: i64, rel_month: i64, timezone: i64) -> Option<i64> {
 }
 
 // MIT: `get_date_rel` (getdate.y:864-880)
-/// `ftz.timezone`, minutes west of UTC at `t`.
 fn local_minutes_west(t: i64) -> Option<i64> {
-    let utc = chrono::DateTime::from_timestamp(t, 0)?;
-    let offset = utc
-        .with_timezone(&chrono::Local)
-        .offset()
-        .fix()
-        .local_minus_utc();
-    Some(-i64::from(offset / 60))
+    Some(-krb5_types::timestamp::localtime_steady(t)?.0.gmtoff / 60)
 }
 
 impl State {

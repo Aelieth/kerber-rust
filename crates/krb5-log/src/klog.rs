@@ -232,9 +232,16 @@ impl Logger {
     }
 
     fn write(&mut self, severity: Severity, msg: &str) {
-        let now = chrono::Local::now();
+        let tm = krb5_types::timestamp::localtime_steady(i64::from(krb5_types::unix_now()));
+        let fmt = |f: &str| {
+            let lc = krb5_types::timestamp::LcTime::C;
+            let s = tm
+                .as_ref()
+                .and_then(|(tm, _)| krb5_types::timestamp::strftime_tm(&lc, f, tm, 64));
+            s.unwrap_or_default()
+        };
         let (line, head) = line_parts(
-            &now.format("%b %d %H:%M:%S").to_string(),
+            &fmt("%b %d %H:%M:%S"),
             &self.host,
             &self.whoami,
             std::process::id(),
@@ -242,7 +249,7 @@ impl Logger {
             msg,
         );
         let body = line.get(head..).unwrap_or_default();
-        let stamp = now.format("%b %e %T").to_string();
+        let stamp = fmt("%b %e %T");
         for dest in &mut self.dests {
             if severity == Severity::Debug && !self.debug && !matches!(dest, Dest::Syslog) {
                 continue;

@@ -337,10 +337,12 @@ fn empty_policy(store: &krb5_kdc::PrincipalStore, name: &PrincipalName) -> Empty
 }
 
 fn too_soon_text(until: u32) -> String {
-    let when = krb5_types::KerberosTime::from_unix_seconds(until)
-        .0
-        .format("%a %b %e %H:%M:%S %Y")
-        .to_string();
+    let lc = krb5_types::timestamp::LcTime::C;
+    let when = krb5_types::timestamp::localtime_steady(i64::from(until))
+        .and_then(|(tm, _)| {
+            krb5_types::timestamp::strftime_tm(&lc, "%a %b %e %H:%M:%S %Y", &tm, 64)
+        })
+        .unwrap_or_else(|| "(error)".to_owned());
     format!(
         "Password cannot be changed because it was changed too recently.\n\
 Please wait until {when} before you change it.\n\
