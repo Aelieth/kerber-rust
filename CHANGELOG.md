@@ -20,6 +20,8 @@ any other `###` heading.
 
 - **client/kdc.** `kinit -s` and `default_principal_expiration` read a wall time across DST as MIT does.
 - **admin.** `getprinc` dates print the zone's abbreviation (`CST`), as MIT does, not a UTC offset.
+- **admin/client.** `TZ` and zone files read as glibc reads them (`posixrules`, `TZDIR`), as MIT does.
+- **client/kdc.** Under a leap-second (`right/`) zone, times and KerberosTime count leap seconds, as MIT does.
 
 ### Removed
 
