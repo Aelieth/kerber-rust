@@ -1288,7 +1288,10 @@ fn build_chain(
 ) -> Result<CertChain, (ChainError, CertChain)> {
     let fail = |depth, reason| ChainError { depth, reason };
     let subject = |c: &[u8]| cert_name_der(c, false);
-    let now = chrono::Utc::now();
+    let utc = chrono::Utc::now();
+    let secs = u32::try_from(utc.timestamp()).unwrap_or(u32::MAX);
+    let frac = chrono::TimeDelta::nanoseconds(i64::from(utc.timestamp_subsec_nanos()));
+    let now = crate::KerberosTime::from_unix_seconds(secs).0.to_utc() + frac;
     let mut chain = vec![leaf.to_vec()];
     loop {
         let depth = chain.len() - 1;

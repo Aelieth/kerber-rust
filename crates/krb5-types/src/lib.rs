@@ -2,7 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use chrono::{FixedOffset, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono::{Datelike, FixedOffset, NaiveDateTime, TimeZone, Timelike, Utc};
 use rasn::prelude::*;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
@@ -225,9 +225,29 @@ impl Encode for WireVersion {
     }
 }
 
-#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 #[rasn(delegate)]
 pub struct KerberosTime(pub GeneralizedTime);
+
+// MIT: `k5_asn1_encode_generaltime` (lib/krb5/asn.1/asn1_encode.c:113-162)
+impl Encode for KerberosTime {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        if self.0.nanosecond() >= 1_000_000_000 {
+            return Err(<E::Error as rasn::enc::Error>::custom(
+                "ASN1_BAD_GMTIME: an inserted leap second",
+                encoder.codec(),
+            ));
+        }
+        self.0
+            .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
 
 // MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:241-277)
 // MIT: `decode_kerberos_time` (lib/krb5/asn.1/asn1_k_encode.c:167-178)
@@ -272,9 +292,13 @@ fn mit_generaltime(s: &[u8]) -> Option<u32> {
         digits(10, 12)?,
         digits(12, 14)?,
     );
-    let (y, m) = (year + month.div_euclid(12), month.rem_euclid(12) + 1);
-    let days = days_from_civil(y, m) + mday - 1;
-    let t = days * 86_400 + hour * 3_600 + min * 60 + sec;
+    let t = if timestamp::leap_zone() {
+        timestamp::timegm(year, month, mday, hour, min, sec)?
+    } else {
+        let (y, m) = (year + month.div_euclid(12), month.rem_euclid(12) + 1);
+        let days = days_from_civil(y, m) + mday - 1;
+        days * 86_400 + hour * 3_600 + min * 60 + sec
+    };
     if t == -1 {
         return None;
     }
@@ -1230,34 +1254,66 @@ pub fn unix_now() -> u32 {
 impl KerberosTime {
     /// RFC 4120 forbids fractional seconds; nanoseconds are zeroed so DER
     #[must_use]
-    #[allow(clippy::expect_used)]
     pub fn now() -> Self {
-        let tz = FixedOffset::east_opt(0).expect("UTC offset 0 is valid");
-        let dt = Utc::now().with_timezone(&tz);
-        Self(dt.with_nanosecond(0).unwrap_or(dt))
+        Self::from_unix_seconds(u32::try_from(Utc::now().timestamp().max(0)).unwrap_or(u32::MAX))
     }
 
     #[must_use]
     pub fn unix_seconds(&self) -> u32 {
-        u32::try_from(self.0.timestamp().max(0)).unwrap_or(u32::MAX)
+        let d = self.0.naive_utc();
+        let leap = timestamp::leap_zone().then(|| {
+            let sec = i64::from(d.second()) + i64::from(d.nanosecond() >= 1_000_000_000);
+            let (mon, day) = (i64::from(d.month0()), i64::from(d.day()));
+            timestamp::timegm(
+                i64::from(d.year()),
+                mon,
+                day,
+                i64::from(d.hour()),
+                i64::from(d.minute()),
+                sec,
+            )
+        });
+        let t = leap.flatten().unwrap_or_else(|| self.0.timestamp());
+        u32::try_from(t.max(0)).unwrap_or(u32::MAX)
     }
 
     #[must_use]
     #[allow(clippy::expect_used)]
     pub fn from_unix_seconds(s: u32) -> Self {
         let tz = FixedOffset::east_opt(0).expect("UTC offset 0 is valid");
+        if timestamp::leap_zone()
+            && let Some((dt, hit)) = timestamp::gmtime(i64::from(s))
+            && let Some(n) = chrono::NaiveDate::from_ymd_opt(
+                i32::from(dt.year()),
+                u32::from(dt.month().unsigned_abs()),
+                u32::from(dt.day().unsigned_abs()),
+            )
+            .and_then(|d| {
+                let (h, m, sec) = (dt.hour(), dt.minute(), dt.second());
+                let nano = if hit > 0 { 1_000_000_000 } else { 0 };
+                let [h, m, sec] = [h, m, sec].map(|v| u32::from(v.unsigned_abs()));
+                d.and_hms_nano_opt(h, m, sec, nano)
+            })
+        {
+            return Self(tz.from_utc_datetime(&n));
+        }
         let utc = chrono::DateTime::from_timestamp(i64::from(s), 0).unwrap_or_else(Utc::now);
         let dt = utc.with_timezone(&tz);
         Self(dt.with_nanosecond(0).unwrap_or(dt))
     }
 
     pub fn add_hours(&self, hours: i64) -> Result<Self, TimeError> {
-        let dur = chrono::TimeDelta::try_hours(hours).ok_or(TimeError::Overflow)?;
-        let dt = self.0.checked_add_signed(dur).ok_or(TimeError::Overflow)?;
-        Ok(Self(dt.with_nanosecond(0).unwrap_or(dt)))
+        self.add_seconds(hours.checked_mul(3600).ok_or(TimeError::Overflow)?)
     }
 
     pub fn add_seconds(&self, seconds: i64) -> Result<Self, TimeError> {
+        if timestamp::leap_zone() {
+            let t = i64::from(self.unix_seconds()).checked_add(seconds);
+            let t = t
+                .and_then(|t| u32::try_from(t).ok())
+                .ok_or(TimeError::Overflow)?;
+            return Ok(Self::from_unix_seconds(t));
+        }
         let dur = chrono::TimeDelta::try_seconds(seconds).ok_or(TimeError::Overflow)?;
         let dt = self.0.checked_add_signed(dur).ok_or(TimeError::Overflow)?;
         Ok(Self(dt.with_nanosecond(0).unwrap_or(dt)))
@@ -1265,6 +1321,9 @@ impl KerberosTime {
 
     #[must_use]
     pub fn delta_seconds(&self, other: &Self) -> i64 {
+        if timestamp::leap_zone() {
+            return i64::from(self.unix_seconds()) - i64::from(other.unix_seconds());
+        }
         self.0.timestamp().saturating_sub(other.0.timestamp())
     }
 }
