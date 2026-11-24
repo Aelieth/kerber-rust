@@ -171,6 +171,9 @@ lockout. Install the module before any listener starts.
   DISALLOW_ALL_TIX.
 - `AsQuestion`: `client` (the resolved record), `requested`, `server`, `peer`, `now`, `request`,
   `s4u2self`.
+- S4U2Self: the impersonated local user gets MIT's entry checks, then `check_as` with
+  `s4u2self: true`, before `check_tgs` is asked. A user refused there never reaches `check_tgs`.
+  These are not logins: a host that counts login attempts should skip them.
 
 ### 3.2 `as_notice`: one notice per AS outcome for a marked client
 
@@ -182,7 +185,7 @@ lockout. Install the module before any listener starts.
 - `Mechanism`: `EncTimestamp`, `EncChallenge`, `Spake`, `Pkinit`, `Otp`.
 - No notice for: a preauth-required (25) or more-data (91) round trip; an unknown client (MIT
   reports none either); a FAST unwrap failure; a parked OTP (the resumed request reports once);
-  a lookaside resend; a discarded request.
+  a lookaside resend; a discarded request; an S4U2Self (not an AS exchange).
 - Delivered after the request's read guard is released, on the KDC serving thread (one thread
   per serve loop), with no lock held. A slow notice delays the next request on that loop. Write
   inline if the next `check_as` must see the count; queue the write if throughput matters.

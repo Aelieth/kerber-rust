@@ -103,8 +103,8 @@ only recorded (informational).
 **1.2.3's runs.** The 1.2.3 code runs this release's whole test list once, on the tagged commit,
 with MIT 1.22.2 first in each comparison: the 1.2.2 list in containers, on the lab machines (power
 cuts, the upgrade, an iprop replica) and in CI's `peers` job, plus the host contract's rows, and
-KLLDAP's acceptance on the same commit. The results record, docs/results/1.2.3.md, is added after
-the tag.
+KLLDAP's acceptance on the same commit. The results record is
+[docs/results/1.2.3.md](docs/results/1.2.3.md).
 
 **1.2.2's runs.** The 1.2.2 code ran this release's test list once, whole, in containers, on the lab
 machines and in CI, with MIT 1.22.2 first in each comparison:
