@@ -100,7 +100,7 @@ its checks are graded as that version behaves. A *check* is one thing the harnes
 such as a command's exit code or output, a log line or a file's contents. It passes or fails, or it is
 only recorded (informational).
 
-**1.2.3's runs.** The 1.2.3 code runs this release's whole test list once, on the tagged commit,
+**1.2.3's runs.** The 1.2.3 code ran this release's whole test list once, on the tagged commit,
 with MIT 1.22.2 first in each comparison: the 1.2.2 list in containers, on the lab machines (power
 cuts, the upgrade, an iprop replica) and in CI's `peers` job, plus the host contract's rows, and
 KLLDAP's acceptance on the same commit. The results record is
