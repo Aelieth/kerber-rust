@@ -73,7 +73,7 @@ update log consistent 19 times and stable but behind once, where MIT's baseline 
 ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no unexpected result, and MIT's
 `kdb5_util` matched and loaded all 230 and 222 dumps.
 
-### Not yet matched in 1.2.3
+### Not yet matched in 1.2.4
 
 - **Client messages and logs.** None changes an outcome.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
