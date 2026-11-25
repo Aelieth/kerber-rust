@@ -34,6 +34,8 @@ const AUTH_CHANGEPW: u32 = 43_787_565;
 const AUTH_SETKEY: u32 = 43_787_570;
 // MIT: `KADM5_PROTECT_PRINCIPAL` (kadm_err.et:37-37)
 const PROTECT_PRINCIPAL: u32 = 43_787_550;
+// MIT: `KADM5_BAD_KEYSALTS` (kadm_err.et:65-65)
+const BAD_KEYSALTS: u32 = 43_787_578;
 const FAIL_AUTH_COUNT: u32 = 0x0001_0000;
 const TL_DATA: u32 = 0x0004_0000;
 /// The directory's own password rule, checked before a change is carried out.
@@ -131,6 +133,9 @@ impl TestHost {
         };
         match i.operation {
             Operation::ChangePassword => match &i.password {
+                Some(_) if !i.keysalts.is_empty() => {
+                    deny(BAD_KEYSALTS, "no key/salt list for a directory user")
+                }
                 Some(p) if String::from_utf8_lossy(p).chars().count() < MIN_PASSWORD => {
                     deny(PASS_Q_TOOSHORT, "password shorter than 8")
                 }
@@ -178,6 +183,26 @@ impl TestHost {
             Self::rows(&change)
         ));
         self.inner.commit_change(change)
+    }
+
+    fn race_policy(&self, name: &str) {
+        let out = self
+            .store
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| "no store".to_owned())
+            .and_then(|shared| {
+                let mut g = shared.try_write().map_err(|_| "store locked".to_owned())?;
+                let mut p = g.policies().get(name).cloned().ok_or("no such policy")?;
+                p.pw_max_life += 86_400;
+                g.change_committing(|c| self.own(c), |s| s.put_policy(p))
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())
+            });
+        self.events.line(&format!(
+            "race policy {name} {}",
+            out.map_or_else(|e| format!("err:{e}"), |()| "ok".to_owned())
+        ));
     }
 }
 
@@ -238,6 +263,11 @@ impl KerberosStore for TestHost {
             intent.password.as_deref().map_or("-".into(), |p| digest(p)),
             unlocked,
         ));
+        if intent.operation == Operation::Create
+            && let Ok(name) = std::env::var("KERBER_TEST_HOST_RACE_POLICY")
+        {
+            self.race_policy(&name);
+        }
         Ok(Some(Box::new(token)))
     }
 }

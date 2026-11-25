@@ -16,7 +16,7 @@ memory-safe language without changing your clients, or you are building a produc
 library. **It is not for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or
 several realms in one KDC process: see [Limitations](#limitations).
 
-This is version **1.2.3**. You build it from source; it is not on crates.io and there is no package.
+This is version **1.2.4**. You build it from source; it is not on crates.io and there is no package.
 
 [Why it exists](#why-it-exists) · [What it can do](#what-it-can-do) · [Limitations](#limitations) ·
 [How it was tested](#how-it-was-tested) · [Download, install and use](#download-install-and-use) ·
@@ -78,7 +78,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
   accepts, such as a principal name that is not UTF-8.
-  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-123) lists what an operator could see, and
+  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-124) lists what an operator could see, and
   [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
   and nix contain `unsafe`, and `cargo vet` reports 18 crates fully audited and 134 exempted.
@@ -177,7 +177,7 @@ prerequisites on: [Rocky Linux](docs/install.md#rocky-linux),
 sudo dnf install -y git gcc make lld rustup krb5-workstation logrotate words
 rustup-init -y --default-toolchain none --profile minimal
 . "$HOME/.cargo/env"
-git clone --branch v1.2.3 https://github.com/Aelieth/kerber-rust.git
+git clone --branch v1.2.4 https://github.com/Aelieth/kerber-rust.git
 cd kerber-rust
 rustup toolchain install
 make build

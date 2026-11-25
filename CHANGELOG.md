@@ -16,11 +16,15 @@ any other `###` heading.
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-25
+
 ### Added
 
 - **kdc.** `OtpVerifyRequest` and `PreauthRock` name the FAST armor ticket's client and realm.
 - **admin/kdc.** `WriteIntent.keysalts`: the key/salt list a kadmin client sent with `-e`; else empty.
 - **kdc.** A debug line logs each `WriteIntent` (password hidden) as the host's commit gets it.
+- **examples.** The lab harness refuses a directory user's `cpw -e` with `KADM5_BAD_KEYSALTS`.
+- **examples.** `KERBER_TEST_HOST_RACE_POLICY`: the lab harness changes that policy as a create prepares.
 
 ### Changed
 
@@ -44,6 +48,8 @@ any other `###` heading.
 
 - **ci.** cargo audit and cargo deny ignore RUSTSEC-2026-0543 (chrono unmaintained); see `docs/security.md`.
 - **field.** The /tmp guard survives absent trees and vanishing names; any other scan error fails it.
+- **ci.** The nightly runs cargo audit on every committed lock, so a new advisory shows without a PR.
+- **hand.** The b2 and r3 hand drivers leave out the same desktop /tmp names as the field guard.
 
 ## [1.2.3] - 2026-11-17
 
@@ -4810,7 +4816,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
 
-[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/Aelieth/kerber-rust/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/Aelieth/kerber-rust/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Aelieth/kerber-rust/compare/v1.2.0...v1.2.1

@@ -1,7 +1,7 @@
 # Host contract
 
 What an embedder that keeps the realm in its own database (a host store) must do, and
-what kerber-rust does for it. As of v1.2.3. The contract covers only principals the host
+what kerber-rust does for it. As of v1.2.4. The contract covers only principals the host
 owns (carrying the mark). Every other principal behaves as MIT's. Stricter-than-MIT rows
 are in [mit-deviations.md](../mit-deviations.md). The rest of the embed surface is in
 [api.md](api.md).
@@ -123,7 +123,8 @@ kpasswd's switch on a `Denied` code (`kpasswd_result`): AUTH_CHANGEPW gives 5, A
 gives 7, PASS_Q_* / PASS_REUSE / PASS_TOOSOON give 4, anything else gives 2.
 
 Codes a host should use: KADM5_AUTH_ADD, AUTH_DELETE, AUTH_MODIFY, AUTH_CHANGEPW, AUTH_SETKEY,
-AUTH_INSUFFICIENT, PROTECT_PRINCIPAL; PASS_Q_TOOSHORT or PASS_Q_GENERIC for a quality refusal.
+AUTH_INSUFFICIENT, PROTECT_PRINCIPAL; PASS_Q_TOOSHORT or PASS_Q_GENERIC for a quality refusal;
+BAD_KEYSALTS to refuse a `keysalts` list.
 Never UNK_PRINC. A `Denied` from `prepare` carries the same codes; no lock was taken.
 
 ### 2.4 Rules
