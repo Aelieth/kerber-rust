@@ -39,6 +39,7 @@ any other `###` heading.
 - **admin/client.** `TZ` and zone files read as glibc reads them (`posixrules`, `TZDIR`), as MIT does.
 - **client/kdc.** Under a leap-second (`right/`) zone, times and KerberosTime count leap seconds, as MIT does.
 - **admin.** kpasswd's too-soon time prints in kadmind's local time, as MIT's `ctime` does, not UTC.
+- **kdc.** A user-to-user TGS takes its indicators and host-checked client from the header ticket, as MIT.
 
 ### Removed
 
