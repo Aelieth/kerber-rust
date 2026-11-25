@@ -37,5 +37,5 @@ entry says what the file holds.
     DC oracle) and [kcm-nfs-verdict.md](labs/kcm-nfs-verdict.md) (why the
     fleet default stays FILE).
 13. [embed/](embed/README.md): [api.md](embed/api.md), the embed API, and
-    [klldap.md](embed/klldap.md), the KLLDAP alignment and the `KerberosSync` seam.
+    [klldap.md](embed/klldap.md), what KLLDAP uses of kerber-rust.
 14. [export-control.md](export-control.md): the cryptography export note.

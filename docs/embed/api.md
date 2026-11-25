@@ -117,8 +117,9 @@ A host implements `host::KerberosStore` (`load`, `commit_change` of a `HostChang
   `KRB5_KDB_ACCESS_ERROR`, `KRB5_KDB_DBNOTINITED`. A host may also answer
   `KerberosStoreError::Denied { kadm5_code, text }`: the image is restored with no
   reload and the client gets that code. `commit_change` gets a `HostChange`: the
-  `WriteIntent` (operation, caller, names, client mask, password), one `RowChange` per
-  touched row with a kadm5 mask and the mark, what `prepare` returned, and the batch.
+  `WriteIntent` (operation, caller, names, client mask, key/salt list, password), one
+  `RowChange` per touched row with a kadm5 mask and the mark, what `prepare` returned,
+  and the batch.
   `change_as` declares an intent; a write that declares none arrives as `Unspecified`.
   kadmind and kpasswd call `prepare` for every declared write, outside every lock.
   `change_committing` and the two `_committing` password helpers replace the commit with
@@ -224,10 +225,12 @@ aliases first: a module must not call back into the store, and should return qui
 ## OTP and require-MFA
 
 The `otp` kdcpreauth module (RFC 6560) asks an embedder `OtpVerifier`; a second
-verifier of a taken name is an error. MIT does not refuse a password login for a
-principal that keeps a key, so MFA is enforced one of three ways, each with the
-indicator the principal's `otp` attribute or the type's `[otp]` indicator names,
-and none on krbtgt (which would refuse the keytab login that gets the FAST armor):
+verifier of a taken name is an error. `OtpVerifyRequest` names the FAST armor ticket's
+client (`armor_client`, `armor_realm`), so a verifier can require the user's own armor.
+MIT does not refuse a password login for a principal that keeps a key, so MFA is
+enforced one of three ways, each with the indicator the principal's `otp` attribute
+or the type's `[otp]` indicator names, and none on krbtgt (which would refuse the
+keytab login that gets the FAST armor):
 
 - **(a)** `require_auth = <indicator>` on each service to protect — MIT-native and
   per-service, but the client still gets a TGT and only the protected service refuses;
