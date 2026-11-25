@@ -276,6 +276,25 @@ jobs:
       - name: Verify MIT-side ledger anchors against the 1.22.2 tree
         run: python3 scripts/ci-policy.py
 
+  audit:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    # ci.yml's audit, daily: a new advisory shows without waiting for a PR.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-audit@0.22.2
+      - name: cargo-audit
+        run: |
+          set -euo pipefail
+          git ls-files '*Cargo.lock' | grep -v '^vendor/' | while read -r lock; do
+            cargo audit --deny warnings --file "$lock"
+          done
+
   test-release:
     if: github.event_name != 'schedule' && github.event_name != 'pull_request'
     runs-on: ubuntu-26.04
