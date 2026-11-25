@@ -418,18 +418,16 @@ pub fn create_password_shared(
         intent.password = Some(zeroize::Zeroizing::new(password.to_vec()));
         intent
     })?;
-    let mut token = Some(token);
+    let mut token = token;
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.reload_if_stale()?;
     if let Some(p) = prepared
-        && g.change_as(intent.clone(), token.take().flatten(), |s| {
-            s.create_prepared(p, actor)
-        })??
+        && g.change_as_kept(intent.clone(), &mut token, |s| s.create_prepared(p, actor))??
     {
         return Ok(());
     }
     let keys = CreateKeys::Password(password);
-    g.change_as(intent, token.take().flatten(), |s| {
+    g.change_as(intent, token, |s| {
         s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
     })?
 }

@@ -27,6 +27,7 @@ any other `###` heading.
 
 ### Fixed
 
+- **admin/kdc.** A password change or create that must rerun under the lock keeps the host's prepared token.
 - **client/kdc.** `kinit -s` and `default_principal_expiration` read a wall time across DST as MIT does.
 - **admin.** `getprinc` dates print the zone's abbreviation (`CST`), as MIT does, not a UTC offset.
 - **admin/client.** `TZ` and zone files read as glibc reads them (`posixrules`, `TZDIR`), as MIT does.

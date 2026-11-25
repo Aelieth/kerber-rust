@@ -15,7 +15,7 @@ use crate::kdb_dump::{
 };
 
 pub(super) type NoCommit = fn(HostChange) -> Result<(), KerberosStoreError>;
-pub(super) type Declared = Option<(WriteIntent, Option<HostPrepared>)>;
+pub(super) type Declared<'p> = Option<(WriteIntent, &'p mut Option<HostPrepared>)>;
 
 #[derive(Clone)]
 pub(crate) struct HostSeam {
@@ -274,14 +274,15 @@ impl PrincipalStore {
             ));
         }
         let intent = WriteIntent::new(Operation::Embedded, Caller::Embedder);
-        self.posted(|s| s.change_host(Some(commit), Some((intent, None)), f))
+        let mut no_token = None;
+        self.posted(|s| s.change_host(Some(commit), Some((intent, &mut no_token)), f))
     }
 
     // MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:364-405)
     pub(super) fn change_host<T, E, C>(
         &mut self,
         commit: Option<C>,
-        declared: Declared,
+        declared: Declared<'_>,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error>
     where
@@ -321,7 +322,7 @@ impl PrincipalStore {
         &mut self,
         done: std::thread::Result<Result<T, E>>,
         commit: Option<C>,
-        declared: Declared,
+        declared: Declared<'_>,
         committed: &mut bool,
     ) -> std::thread::Result<Result<Result<T, E>, Error>>
     where
@@ -355,12 +356,19 @@ impl PrincipalStore {
             }
         };
         let skip = rows.is_empty() && batch.is_empty();
-        let (intent, prepared) = declared.unwrap_or_else(|| {
-            (
+        let mut no_token = None;
+        let (intent, slot) = match declared {
+            Some(d) => d,
+            None => (
                 WriteIntent::new(Operation::Unspecified, Caller::Embedder),
-                None,
-            )
-        });
+                &mut no_token,
+            ),
+        };
+        let prepared = if commit.is_none() && skip {
+            None
+        } else {
+            slot.take()
+        };
         let change = HostChange {
             intent,
             rows,
