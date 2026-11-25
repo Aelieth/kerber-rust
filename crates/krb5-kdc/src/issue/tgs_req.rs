@@ -358,7 +358,10 @@ fn check_tgs_req<'a>(
     crate::audit::note_tgs(|f| f.authtime = subject_authtime.unix_seconds());
     let mut auth_indicators = Vec::new();
     if !s4u2self {
-        let subject = stkt.as_ref().map_or(&enc_tkt, |s| &s.part);
+        let subject = match stkt.as_ref() {
+            Some(s) if s4u2proxy => &s.part,
+            _ => &enc_tkt,
+        };
         auth_indicators = get_auth_indicators(
             store.policy(),
             subject,
@@ -548,8 +551,8 @@ fn tgs_flags_times_policy<'a>(
     } = c;
     let (subject_cname, subject_crealm) = match (&s4u_subject, stkt.as_ref()) {
         (Some((user, realm)), _) if s4u2self => (user, realm.as_str()),
-        (_, Some(st)) => (&st.part.cname, utf8_realm(&st.part.crealm)?),
-        (_, None) => (&enc_tkt.cname, utf8_realm(&enc_tkt.crealm)?),
+        (_, Some(st)) if s4u2proxy => (&st.part.cname, utf8_realm(&st.part.crealm)?),
+        _ => (&enc_tkt.cname, utf8_realm(&enc_tkt.crealm)?),
     };
     let s4u_user_local = s4u_local.is_some();
     let tgs_client = if s4u2self {
