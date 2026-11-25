@@ -16,6 +16,10 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Added
+
+- **kdc.** `OtpVerifyRequest` and `PreauthRock` name the FAST armor ticket's client and realm.
+
 ### Fixed
 
 - **client/kdc.** `kinit -s` and `default_principal_expiration` read a wall time across DST as MIT does.

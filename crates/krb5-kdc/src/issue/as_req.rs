@@ -293,6 +293,9 @@ fn finish_preauth(
     } = lookup;
     let ckey = ckey_owned.as_ref();
     let armor = fast.map(|f| &f.armor_key);
+    let armor_client = fast
+        .and_then(|f| f.armor_client.as_ref())
+        .map(|(name, realm)| (name, realm.as_str()));
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
         slice
@@ -359,6 +362,7 @@ fn finish_preauth(
         ikey: ckey.map(|k| &k.key),
         etype: ckey.map(|k| k.etype),
         armor_key: armor,
+        armor_client,
         as_req_der: &as_req_der,
         body_der: pa_body,
         cname: &cname,

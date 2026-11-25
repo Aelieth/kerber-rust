@@ -321,7 +321,8 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     let Some(raw) = find_pa(rock.padata, pa::OTP_REQUEST) else {
         return Ok(None);
     };
-    let Some(armor) = rock.armor_key else {
+    let (Some(armor), Some((armor_client, armor_realm))) = (rock.armor_key, rock.armor_client)
+    else {
         com_err(E_PREAUTH_FAILED, "No armor key found when verifying padata");
         return Err(fail(24, E_PREAUTH_FAILED));
     };
@@ -422,6 +423,8 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
             let request = OtpVerifyRequest {
                 principal: rock.client.clone(),
                 realm: realm.to_owned(),
+                armor_client: armor_client.clone(),
+                armor_realm: armor_realm.to_owned(),
                 token_type: tok.ty.name.clone(),
                 username: tok.username.clone(),
                 otp_value: Zeroizing::new(otp_value.to_vec()),

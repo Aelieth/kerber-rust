@@ -65,6 +65,7 @@ impl KdcPreauth for DemoPreauth {
             ikey: _ikey,
             etype: _etype,
             armor_key: _armor_key,
+            armor_client: _armor_client,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,

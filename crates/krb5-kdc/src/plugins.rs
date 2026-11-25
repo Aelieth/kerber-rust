@@ -89,6 +89,7 @@ pub struct PreauthRock<'a> {
     pub ikey: Option<&'a ProtocolKey>,
     pub etype: Option<EncryptionType>,
     pub armor_key: Option<&'a ProtocolKey>,
+    pub armor_client: Option<(&'a PrincipalName, &'a str)>,
     pub as_req_der: &'a [u8],
     pub body_der: &'a [u8],
     pub cname: &'a PrincipalName,
@@ -170,6 +171,7 @@ impl KdcPreauth for FastMod {
             ikey: _ikey,
             etype: _etype,
             armor_key: _armor_key,
+            armor_client: _armor_client,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -219,6 +221,7 @@ impl KdcPreauth for PkinitMod {
             ikey: _ikey,
             etype,
             armor_key: _armor_key,
+            armor_client: _armor_client,
             as_req_der,
             body_der,
             cname,
@@ -316,6 +319,7 @@ impl KdcPreauth for SpakeMod {
             ikey,
             etype: _etype,
             armor_key: _armor_key,
+            armor_client: _armor_client,
             as_req_der: _as_req_der,
             body_der,
             cname: _cname,
@@ -375,6 +379,7 @@ impl KdcPreauth for EncTsMod {
             ikey: _ikey,
             etype: _etype,
             armor_key: _armor_key,
+            armor_client: _armor_client,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -466,6 +471,7 @@ impl KdcPreauth for EncChallengeMod {
             ikey: _ikey,
             etype: _etype,
             armor_key: _armor_key,
+            armor_client: _armor_client,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -554,6 +560,8 @@ pub struct OtpTokenFields {
 pub struct OtpVerifyRequest {
     pub principal: Principal,
     pub realm: String,
+    pub armor_client: PrincipalName,
+    pub armor_realm: String,
     pub token_type: String,
     pub username: Vec<u8>,
     /// Untrusted bytes, not UTF-8: it may be the password and the code.
@@ -575,10 +583,13 @@ impl OtpVerifyRequest {
         otp_value: impl Into<Vec<u8>>,
     ) -> Self {
         let token_type = token_type.into();
+        let realm = realm.into();
         let now = Instant::now();
         Self {
+            armor_client: principal.name.clone(),
+            armor_realm: realm.clone(),
             principal,
-            realm: realm.into(),
+            realm,
             token: OtpTokenFields {
                 ty_name: token_type.clone(),
                 indicators: Vec::new(),
@@ -1273,6 +1284,7 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
         ikey,
         etype,
         armor_key,
+        armor_client,
         as_req_der,
         body_der,
         cname,
@@ -1285,6 +1297,7 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
             ikey,
             etype,
             armor_key,
+            armor_client,
             as_req_der,
             body_der,
             cname,

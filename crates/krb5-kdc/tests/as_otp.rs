@@ -30,6 +30,7 @@ struct Call {
     token_type: String,
     username: Vec<u8>,
     otp_value: Vec<u8>,
+    armor_client: String,
 }
 
 /// A verifier that answers from a script, rejecting once the script runs out.
@@ -63,6 +64,7 @@ impl OtpVerifier for Scripted {
             token_type: req.token_type.clone(),
             username: req.username.clone(),
             otp_value: req.otp_value.to_vec(),
+            armor_client: req.armor_client.unparse_with_realm_lossy(&req.armor_realm),
         });
         self.script
             .lock()
@@ -418,6 +420,7 @@ fn accept_replaces_reply_key_with_the_armor_key() {
             token_type: "DEFAULT".into(),
             username: format!("{TEST_USER}@{TEST_REALM}").into_bytes(),
             otp_value: b"123456".to_vec(),
+            armor_client: format!("{TEST_USER}@{TEST_REALM}"),
         }]
     );
     let fast = unwrap_fast_rep(&a.key, &issued.rep.0.padata).expect("FAST rep");

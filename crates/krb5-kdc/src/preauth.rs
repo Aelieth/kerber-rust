@@ -32,11 +32,20 @@ pub(crate) use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
 /// After armor, inner_body and inner_padata are the request; MIT frees the outer.
 pub(crate) struct FastOk {
     pub(crate) armor_key: ProtocolKey,
+    pub(crate) armor_client: Option<ArmorClient>,
     pub(crate) inner_padata: Vec<PaData>,
     pub(crate) inner_body: Vec<u8>,
     pub(crate) nonce: u32,
     pub(crate) fast_options: krb5_types::fast::FastOptions,
 }
+
+pub(crate) type ArmorClient = (PrincipalName, String);
+type ArmorTicket = (
+    PrincipalName,
+    ProtocolKey,
+    Option<EncryptionKey>,
+    ArmorClient,
+);
 
 pub(crate) fn unwrap_fast(
     store: &dyn PrincipalRead,
@@ -80,6 +89,7 @@ fn kdc_find_fast(
         Err(e) => return Err(fold(asn1_refusal(raw, CONTEXT, 0, &e))),
     };
     let mut armor_key = None;
+    let mut armor_client = None;
     if let Some(armor) = armored.armor.as_ref() {
         if armor.armor_type == krb5_types::fast::ARMOR_AP_REQUEST {
             if tgs_subkey.is_some() {
@@ -88,7 +98,9 @@ fn kdc_find_fast(
                     "Ap-request armor not permitted with TGS",
                 ));
             }
-            armor_key = Some(armor_ap_request(store, armor.armor_value.as_ref())?);
+            let (key, client) = armor_ap_request(store, armor.armor_value.as_ref())?;
+            armor_key = Some(key);
+            armor_client = Some(client);
         } else {
             return Err(proto_fast(
                 err::PREAUTH_FAILED,
@@ -135,6 +147,7 @@ fn kdc_find_fast(
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
         armor_key,
+        armor_client,
         inner_padata: inner.padata,
         inner_body,
         nonce,
@@ -261,10 +274,14 @@ fn protocol_key(k: &EncryptionKey) -> Result<ProtocolKey, (i32, String)> {
 }
 
 // MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
-fn armor_ap_request(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
-    let (sname, session, subkey) = armor_rd_req(store, ap_raw).map_err(|(code, text)| {
-        proto_fast(code, format!("{text} while handling ap-request armor"))
-    })?;
+fn armor_ap_request(
+    store: &dyn PrincipalRead,
+    ap_raw: &[u8],
+) -> Result<(ProtocolKey, ArmorClient), Error> {
+    let (sname, session, subkey, client) =
+        armor_rd_req(store, ap_raw).map_err(|(code, text)| {
+            proto_fast(code, format!("{text} while handling ap-request armor"))
+        })?;
     if !sname.is_krbtgt_for(store.realm()) {
         return Err(proto_fast(
             err::SERVER_NOMATCH,
@@ -275,16 +292,14 @@ fn armor_ap_request(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protocol
         return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
     };
     let subk = protocol_key(&sub).map_err(fold)?;
-    krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor")
-        .map_err(|e| fold(crypto_refusal(&e)))
+    let key = krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor")
+        .map_err(|e| fold(crypto_refusal(&e)))?;
+    Ok((key, client))
 }
 
 // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
 // MIT: `krb5_rd_req` (lib/krb5/krb/rd_req.c:45-109)
-fn armor_rd_req(
-    store: &dyn PrincipalRead,
-    ap_raw: &[u8],
-) -> Result<(PrincipalName, ProtocolKey, Option<EncryptionKey>), (i32, String)> {
+fn armor_rd_req(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ArmorTicket, (i32, String)> {
     let generic = |text: String| (err::GENERIC, text);
     if ap_raw.first().is_none_or(|b| b & !0x20 != 0x4e) {
         return Err((err::MSG_TYPE, "Invalid message type".to_owned()));
@@ -386,7 +401,11 @@ fn armor_rd_req(
         &policy.permitted_list(),
     )
     .map_err(|e| generic(e.to_string()))?;
-    Ok((ticket.sname.clone(), session, authenticator.subkey))
+    let client = (
+        enc_tkt.cname.clone(),
+        String::from_utf8_lossy(enc_tkt.crealm.as_bytes()).into_owned(),
+    );
+    Ok((ticket.sname.clone(), session, authenticator.subkey, client))
 }
 
 pub(crate) const E_ERANGE: &str = "Numerical result out of range";
