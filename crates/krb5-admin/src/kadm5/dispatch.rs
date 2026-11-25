@@ -593,6 +593,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 vec![named(&c.name, &req)],
                 |i| {
                     i.client_mask = Some(c.ent.mask);
+                    i.keysalts.clone_from(&c.ks);
                     i.password.clone_from(&c.pass);
                 },
             ) {
@@ -754,6 +755,7 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             let fill = |i: &mut WriteIntent| {
                 i.keepold = Some(u32::from(keepold));
+                i.keysalts.clone_from(&ks);
                 i.password = Some(pass.clone());
             };
             let (intent, token) = if prefetched {
@@ -1003,7 +1005,10 @@ pub(super) fn dispatch_kadm5_ticket(
                 Operation::Randkey,
                 Some((&name, &req)),
                 vec![named(&name, &req)],
-                |i| i.keepold = Some(u32::from(keepold)),
+                |i| {
+                    i.keepold = Some(u32::from(keepold));
+                    i.keysalts.clone_from(&ks);
+                },
             ) {
                 Ok(d) => d,
                 Err(rep) => return Ok(prefetch_failed(rep)),

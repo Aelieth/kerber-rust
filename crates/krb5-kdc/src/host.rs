@@ -3,7 +3,7 @@ pub mod conformance;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 
-use krb5_crypto::{KeyUsage, ProtocolKey};
+use krb5_crypto::{KeySalt, KeyUsage, ProtocolKey};
 use krb5_types::pac::RpcSid;
 use zeroize::Zeroizing;
 
@@ -148,6 +148,7 @@ pub struct WriteIntent {
     pub requested: Vec<String>,
     pub client_mask: Option<u32>,
     pub keepold: Option<u32>,
+    pub keysalts: Vec<KeySalt>,
     pub password: Option<Zeroizing<Vec<u8>>>,
 }
 
@@ -160,6 +161,7 @@ impl WriteIntent {
             requested: Vec::new(),
             client_mask: None,
             keepold: None,
+            keysalts: Vec::new(),
             password: None,
         }
     }
@@ -173,6 +175,7 @@ impl std::fmt::Debug for WriteIntent {
             .field("requested", &self.requested)
             .field("client_mask", &self.client_mask)
             .field("keepold", &self.keepold)
+            .field("keysalts", &self.keysalts)
             .field("password", &self.password.as_ref().map(|_| "<set>"))
             .finish()
     }

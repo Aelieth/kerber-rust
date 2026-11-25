@@ -19,6 +19,7 @@ any other `###` heading.
 ### Added
 
 - **kdc.** `OtpVerifyRequest` and `PreauthRock` name the FAST armor ticket's client and realm.
+- **admin/kdc.** `WriteIntent.keysalts`: the key/salt list a kadmin client sent with `-e`; else empty.
 
 ### Fixed
 
