@@ -4,8 +4,11 @@
 
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{TEST_USER, TEST_USER_PASSWORD};
+use krb5_kdc::{Error, KdcEnv, Policy, Principal, PrincipalRead, PrincipalStore};
 
 use krb5_testkit::password_key;
+use krb5_types::PrincipalName;
+use krb5_types::pac::RpcSid;
 
 /// `TEST_USER` string-to-key with the documented password.
 ///
@@ -61,4 +64,44 @@ pub fn failure_trace(lines: &[String]) -> Vec<String> {
             Some(format!("AS_REQ {status}, {tail}"))
         })
         .collect()
+}
+
+pub struct Faulty<'a> {
+    pub inner: &'a PrincipalStore,
+    pub fail_id: String,
+    pub fail_client: bool,
+    pub fault: fn() -> Error,
+}
+
+impl PrincipalRead for Faulty<'_> {
+    fn realm(&self) -> &str {
+        <PrincipalStore as PrincipalRead>::realm(self.inner)
+    }
+    fn policy(&self) -> &Policy {
+        <PrincipalStore as PrincipalRead>::policy(self.inner)
+    }
+    fn domain_sid(&self) -> &RpcSid {
+        <PrincipalStore as PrincipalRead>::domain_sid(self.inner)
+    }
+    fn env(&self) -> &KdcEnv {
+        <PrincipalStore as PrincipalRead>::env(self.inner)
+    }
+    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
+        if id == self.fail_id {
+            return Err((self.fault)());
+        }
+        <PrincipalStore as PrincipalRead>::fetch(self.inner, id)
+    }
+    fn fetch_client(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
+        if self.fail_client {
+            return Err((self.fault)());
+        }
+        self.fetch_name(name)
+    }
+    fn list_ids(&self) -> Result<Vec<String>, Error> {
+        <PrincipalStore as PrincipalRead>::list_ids(self.inner)
+    }
+    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
+        <PrincipalStore as PrincipalRead>::list_principals(self.inner)
+    }
 }

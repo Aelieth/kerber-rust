@@ -77,10 +77,26 @@ pub enum TgsKind {
     S4u2Proxy,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TgsClient<'a> {
+    Found(&'a Principal),
+    NoEntry,
+    ReadFailed,
+}
+
+impl<'a> TgsClient<'a> {
+    #[must_use]
+    pub fn principal(self) -> Option<&'a Principal> {
+        match self {
+            Self::Found(p) => Some(p),
+            Self::NoEntry | Self::ReadFailed => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TgsQuestion<'a> {
-    /// `None`: no such local principal any more.
-    pub client: Option<&'a Principal>,
+    pub client: TgsClient<'a>,
     pub subject: &'a PrincipalName,
     pub server: &'a Principal,
     pub ticket: &'a EncTicketPart,
@@ -282,17 +298,17 @@ pub(crate) fn check_tgs_policy(
     server: &Principal,
     ticket: &EncTicketPart,
     subject: &PrincipalName,
-    client: Option<&Principal>,
+    client: TgsClient<'_>,
     kind: TgsKind,
     now: u32,
 ) -> Result<(), Error> {
     let Some(module) = admission(store) else {
         return match client {
-            Some(c) if c.host_owned() => Err(no_module(c)),
+            TgsClient::Found(c) if c.host_owned() => Err(no_module(c)),
             _ => Ok(()),
         };
     };
-    if client.is_some_and(|c| !c.host_owned()) {
+    if client.principal().is_some_and(|c| !c.host_owned()) {
         return Ok(());
     }
     let peer = crate::plugins::request_peer();

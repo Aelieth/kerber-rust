@@ -274,7 +274,7 @@ impl HostAdmission for Gate {
     }
 
     fn check_tgs(&self, q: &TgsQuestion<'_>) -> Result<(), KdcRefusal> {
-        let id = q.client.map_or_else(
+        let id = q.client.principal().map_or_else(
             || format!("{}(none)", q.subject.components_joined_lossy()),
             krb5_kdc::Principal::id,
         );

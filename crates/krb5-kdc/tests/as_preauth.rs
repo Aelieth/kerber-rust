@@ -74,8 +74,8 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_kdc::{
-    Error, KdcEnv, KdcPolicy, KdcPreauth, KeyEntry, Policy, PolicyAdjustment, Principal,
-    PrincipalRead, PrincipalStore, S2K_ITERS, random_key, register_preauth,
+    Error, KdcPolicy, KdcPreauth, KeyEntry, PolicyAdjustment, Principal, PrincipalRead,
+    PrincipalStore, S2K_ITERS, random_key, register_preauth,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
 
@@ -83,7 +83,6 @@ use krb5_protocol::{
     armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pk_as_req_spki, unwrap_fast_rep,
 };
 use krb5_testkit::{expect_status, password_key, pref_etypes, user};
-use krb5_types::pac::RpcSid;
 use krb5_types::{
     EncKdcRepPart, EncryptedData, KerberosTime, KrbError, MethodData, PaData, PaPacRequest,
     PrincipalName, ascii, err, ku, pa,
@@ -527,39 +526,6 @@ fn as_client_key_skips_a_non_permitted_requested_etype() {
     );
 }
 
-struct Faulty<'a> {
-    inner: &'a PrincipalStore,
-    fail_id: String,
-    fault: fn() -> Error,
-}
-
-impl PrincipalRead for Faulty<'_> {
-    fn realm(&self) -> &str {
-        <PrincipalStore as PrincipalRead>::realm(self.inner)
-    }
-    fn policy(&self) -> &Policy {
-        <PrincipalStore as PrincipalRead>::policy(self.inner)
-    }
-    fn domain_sid(&self) -> &RpcSid {
-        <PrincipalStore as PrincipalRead>::domain_sid(self.inner)
-    }
-    fn env(&self) -> &KdcEnv {
-        <PrincipalStore as PrincipalRead>::env(self.inner)
-    }
-    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
-        if id == self.fail_id {
-            return Err((self.fault)());
-        }
-        <PrincipalStore as PrincipalRead>::fetch(self.inner, id)
-    }
-    fn list_ids(&self) -> Result<Vec<String>, Error> {
-        <PrincipalStore as PrincipalRead>::list_ids(self.inner)
-    }
-    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
-        <PrincipalStore as PrincipalRead>::list_principals(self.inner)
-    }
-}
-
 fn backend_fault() -> Error {
     Error::InvalidArgument("backend: disk read failed".into())
 }
@@ -591,9 +557,10 @@ fn as_error(fail_id: &str, fault: fn() -> Error) -> (i32, Option<String>) {
     )
     .unwrap();
     let raw = krb5_asn1::encode(&req).unwrap();
-    let faulty = Faulty {
+    let faulty = common::Faulty {
         inner: &store,
         fail_id: fail_id.to_owned(),
+        fail_client: false,
         fault,
     };
     let reply = krb5_kdc::handle_request(&faulty, &raw).expect("a KRB-ERROR reply");

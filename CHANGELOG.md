@@ -24,6 +24,7 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** `TgsQuestion.client` is a `TgsClient`: `Found`, `NoEntry`, or `ReadFailed` (MIT goes on).
 - **kdc.** `WriteIntent` is `#[non_exhaustive]`: build it with `WriteIntent::new`.
 
 ### Fixed

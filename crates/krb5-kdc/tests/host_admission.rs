@@ -1,5 +1,8 @@
 //! The host's verdicts and notices for the principals it owns.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +26,7 @@ struct Host {
     refuse_tgs: AtomicBool,
     notices: Mutex<Vec<AsNotice>>,
     tgs: Mutex<Vec<(TgsKind, bool)>>,
+    read_failed: AtomicBool,
     subjects: Mutex<Vec<(TgsKind, String, Option<String>)>>,
     deny_subject: Mutex<Option<String>>,
 }
@@ -43,8 +47,12 @@ impl HostAdmission for Host {
     }
 
     fn check_tgs(&self, q: &TgsQuestion<'_>) -> Result<(), KdcRefusal> {
-        self.tgs.lock().unwrap().push((q.kind, q.client.is_some()));
-        let client = q.client.map(Principal::id);
+        if matches!(q.client, krb5_kdc::admission::TgsClient::ReadFailed) {
+            self.read_failed.store(true, Ordering::SeqCst);
+        }
+        let found = q.client.principal().is_some();
+        self.tgs.lock().unwrap().push((q.kind, found));
+        let client = q.client.principal().map(Principal::id);
         let subject = q.subject.components_joined_lossy();
         let denied = self.deny_subject.lock().unwrap().as_ref() == Some(&subject);
         self.subjects
@@ -217,7 +225,7 @@ fn a_marked_principal_with_no_module_is_refused() {
     );
 }
 
-fn tgs_code(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs, sname: PrincipalName) -> i32 {
+fn tgs_code(store: &dyn PrincipalRead, issued: &krb5_kdc::IssuedAs, sname: PrincipalName) -> i32 {
     let options = if sname == PrincipalName::krbtgt(TEST_REALM) {
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
@@ -244,6 +252,28 @@ fn tgs_code(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs, sname: Principa
         },
         |_| 0,
     )
+}
+
+fn unreadable(store: &PrincipalStore) -> common::Faulty<'_> {
+    common::Faulty {
+        inner: store,
+        fail_id: String::new(),
+        fail_client: true,
+        fault: || Error::InvalidArgument("backend: disk read failed".into()),
+    }
+}
+
+#[test]
+fn a_tgs_client_read_failure_reaches_the_host_and_goes_on_without_one() {
+    let service = krb5_kdc::testrealm::documented_host();
+    let module = Arc::new(Host::default());
+    let store = marked(Some(Arc::clone(&module)));
+    let issued = krb5_testkit::issue_tgt_renewable(&store, TEST_USER, 9, true);
+    assert_eq!(tgs_code(&unreadable(&store), &issued, service.clone()), 0);
+    assert!(module.read_failed.load(Ordering::SeqCst));
+    let (store, _) = bootstrap_documented().unwrap();
+    let issued = krb5_testkit::issue_tgt_renewable(&store, TEST_USER, 9, true);
+    assert_eq!(tgs_code(&unreadable(&store), &issued, service), 0);
 }
 
 #[test]

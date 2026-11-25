@@ -1,6 +1,6 @@
 //! A TGS request: the header ticket, the server, and the reply.
 
-use crate::admission::TgsKind;
+use crate::admission::{TgsClient, TgsKind};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{
@@ -675,8 +675,13 @@ fn tgs_flags_times_policy<'a>(
             TgsKind::Normal
         };
         let fetched = match &tgs_client {
-            None => store.fetch_client(subject_cname).ok().flatten(),
-            Some(_) => None,
+            None => store.fetch_client(subject_cname),
+            Some(_) => Ok(None),
+        };
+        let client = match (&tgs_client, &fetched) {
+            (Some(c), _) | (None, Ok(Some(c))) => TgsClient::Found(c),
+            (None, Ok(None)) => TgsClient::NoEntry,
+            (None, Err(_)) => TgsClient::ReadFailed,
         };
         crate::admission::check_tgs_policy(
             store,
@@ -684,7 +689,7 @@ fn tgs_flags_times_policy<'a>(
             &server,
             &enc_tkt,
             subject_cname,
-            tgs_client.as_ref().or(fetched.as_ref()),
+            client,
             kind,
             now.unix_seconds(),
         )?;
