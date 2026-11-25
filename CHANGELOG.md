@@ -21,6 +21,8 @@ any other `###` heading.
 - **kdc.** `OtpVerifyRequest` and `PreauthRock` name the FAST armor ticket's client and realm.
 - **admin/kdc.** `WriteIntent.keysalts`: the key/salt list a kadmin client sent with `-e`; else empty.
 - **kdc.** A debug line logs each `WriteIntent` (password hidden) as the host's commit gets it.
+- **examples.** The lab harness refuses a directory user's `cpw -e` with `KADM5_BAD_KEYSALTS`.
+- **examples.** `KERBER_TEST_HOST_RACE_POLICY`: the lab harness changes that policy as a create prepares.
 
 ### Changed
 
