@@ -582,6 +582,17 @@ impl PrincipalStore {
         prepared: Option<crate::host::HostPrepared>,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
+        let mut prepared = prepared;
+        self.change_as_kept(intent, &mut prepared, f)
+    }
+
+    /// `change_as` that leaves `prepared` in place when no commit runs.
+    pub fn change_as_kept<T, E>(
+        &mut self,
+        intent: crate::host::WriteIntent,
+        prepared: &mut Option<crate::host::HostPrepared>,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Error> {
         if self.post.is_some() {
             return Ok(f(self));
         }
@@ -631,7 +642,7 @@ impl PrincipalStore {
 
     fn change_locked<T, E>(
         &mut self,
-        declared: host_seam::Declared,
+        declared: host_seam::Declared<'_>,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
         if self.saves_held {

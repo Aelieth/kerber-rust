@@ -170,10 +170,21 @@ fn commit<T>(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
     api: u32,
-    (intent, prepared): Declared,
+    (intent, mut prepared): Declared,
     f: impl FnOnce(&mut krb5_kdc::PrincipalStore) -> Result<T, krb5_kdc::Error>,
 ) -> Result<T, Vec<u8>> {
-    match g.change_as(intent, prepared, f) {
+    commit_kept(g, proc, api, intent, &mut prepared, f)
+}
+
+fn commit_kept<T>(
+    g: &mut krb5_kdc::PrincipalStore,
+    proc: u32,
+    api: u32,
+    intent: WriteIntent,
+    prepared: &mut Option<HostPrepared>,
+    f: impl FnOnce(&mut krb5_kdc::PrincipalStore) -> Result<T, krb5_kdc::Error>,
+) -> Result<T, Vec<u8>> {
+    match g.change_as_kept(intent, prepared, f) {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(generic_ret(api, inner_code(proc, e))),
         Err(e) => Err(generic_ret(api, store_code(proc, &e))),
@@ -593,13 +604,14 @@ pub(super) fn dispatch_kadm5_ticket(
                 vec![named(&c.name, &req)],
                 |i| {
                     i.client_mask = Some(c.ent.mask);
+                    i.keysalts.clone_from(&c.ks);
                     i.password.clone_from(&c.pass);
                 },
             ) {
                 Ok(d) => d,
                 Err(rep) => return Ok(rep),
             };
-            let mut token = Some(token);
+            let mut token = token;
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -608,8 +620,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, dup_code(p)));
             }
             if let Some(p) = prepared {
-                let declared = (intent.clone(), token.take().flatten());
-                let created = commit(&mut g, proc, API_V2, declared, |s| {
+                let created = commit_kept(&mut g, proc, API_V2, intent.clone(), &mut token, |s| {
                     if !s.create_prepared(p, actor)? {
                         return Ok(false);
                     }
@@ -627,7 +638,7 @@ pub(super) fn dispatch_kadm5_ticket(
                     return Ok(generic_ret(API_V2, dup_code(p)));
                 }
             }
-            let declared = (intent, token.take().flatten());
+            let declared = (intent, token);
             let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.create_principal_3_in(
                     &c.name,
@@ -754,6 +765,7 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             let fill = |i: &mut WriteIntent| {
                 i.keepold = Some(u32::from(keepold));
+                i.keysalts.clone_from(&ks);
                 i.password = Some(pass.clone());
             };
             let (intent, token) = if prefetched {
@@ -771,15 +783,14 @@ pub(super) fn dispatch_kadm5_ticket(
             } else {
                 who.unprepared(Operation::ChangePassword, (&name, &req), fill)
             };
-            let mut token = Some(token);
+            let mut token = token;
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) if prefetched => return Ok(rep),
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
             if let Some((n, p)) = prepared {
-                let declared = (intent.clone(), token.take().flatten());
-                match commit(&mut g, proc, API_V2, declared, |s| {
+                match commit_kept(&mut g, proc, API_V2, intent.clone(), &mut token, |s| {
                     s.apply_password(p, n, actor)
                 }) {
                     Ok(true) => return Ok(generic_ret(API_V2, 0)),
@@ -791,7 +802,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(v) => v,
                 Err(rep) => return Ok(rep),
             };
-            let declared = (intent, token.take().flatten());
+            let declared = (intent, token);
             let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.set_password_etypes_keepold_n_in(&tname, &trealm, &pass, n, actor, &ks)
             });
@@ -1003,7 +1014,10 @@ pub(super) fn dispatch_kadm5_ticket(
                 Operation::Randkey,
                 Some((&name, &req)),
                 vec![named(&name, &req)],
-                |i| i.keepold = Some(u32::from(keepold)),
+                |i| {
+                    i.keepold = Some(u32::from(keepold));
+                    i.keysalts.clone_from(&ks);
+                },
             ) {
                 Ok(d) => d,
                 Err(rep) => return Ok(prefetch_failed(rep)),

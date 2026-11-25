@@ -16,8 +16,20 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Added
+
+- **kdc.** `OtpVerifyRequest` and `PreauthRock` name the FAST armor ticket's client and realm.
+- **admin/kdc.** `WriteIntent.keysalts`: the key/salt list a kadmin client sent with `-e`; else empty.
+- **kdc.** A debug line logs each `WriteIntent` (password hidden) as the host's commit gets it.
+
+### Changed
+
+- **kdc.** `TgsQuestion.client` is a `TgsClient`: `Found`, `NoEntry`, or `ReadFailed` (MIT goes on).
+- **kdc.** `WriteIntent` is `#[non_exhaustive]`: build it with `WriteIntent::new`.
+
 ### Fixed
 
+- **admin/kdc.** A password change or create that must rerun under the lock keeps the host's prepared token.
 - **client/kdc.** `kinit -s` and `default_principal_expiration` read a wall time across DST as MIT does.
 - **admin.** `getprinc` dates print the zone's abbreviation (`CST`), as MIT does, not a UTC offset.
 - **admin/client.** `TZ` and zone files read as glibc reads them (`posixrules`, `TZDIR`), as MIT does.

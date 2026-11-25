@@ -279,18 +279,18 @@ pub fn change_password_shared_as(
     } else {
         (intent, None)
     };
-    let mut token = Some(token);
+    let mut token = token;
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.reload_if_stale()?;
     if let Some(p) = prepared
-        && g.change_as(intent.clone(), token.take().flatten(), |s| {
+        && g.change_as_kept(intent.clone(), &mut token, |s| {
             s.apply_password(p, keepold, actor)
         })??
     {
         return Ok(());
     }
     checks(&g)?;
-    g.change_as(intent, token.take().flatten(), |s| {
+    g.change_as(intent, token, |s| {
         s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
     })?
 }

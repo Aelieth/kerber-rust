@@ -32,6 +32,8 @@ struct TestHost {
     deny: Mutex<Option<u32>>,
     prepared: Mutex<Vec<Prepared>>,
     store: OnceLock<Weak<std::sync::RwLock<PrincipalStore>>>,
+    race: Mutex<Option<PrincipalName>>,
+    tokens: Mutex<Vec<bool>>,
 }
 
 impl TestHost {
@@ -46,6 +48,7 @@ impl KerberosStore for TestHost {
     }
 
     fn commit_change(&self, change: HostChange) -> Result<(), KerberosStoreError> {
+        self.tokens.lock().unwrap().push(change.prepared.is_some());
         let i = &change.intent;
         self.seen
             .lock()
@@ -86,7 +89,14 @@ impl KerberosStore for TestHost {
                 unlocked,
                 intent.client_mask,
             ));
-        Ok(None)
+        if let Some(name) = self.race.lock().unwrap().take() {
+            let store = self.store.get().and_then(Weak::upgrade).unwrap();
+            let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+            g.change(|s| s.set_string(&name, "raced", Some("yes")))
+                .unwrap()
+                .unwrap();
+        }
+        Ok(Some(Box::new(4_u32)))
     }
 }
 
@@ -199,6 +209,34 @@ fn every_kadmind_write_reaches_the_host_with_its_intent() {
             .iter()
             .any(|(op, pw, _, _)| *op == Operation::ChangePassword && *pw)
     );
+}
+
+#[test]
+fn a_prepared_token_reaches_the_commit_that_writes() {
+    let (store, host, acl, actor) = hosted();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    *host.race.lock().unwrap() = Some(user.clone());
+    let args = chpass_args(TEST_USER, "raced-password-1");
+    let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL, &args).unwrap();
+    assert_eq!(ret_code(&out), 0);
+    *host.race.lock().unwrap() = Some(user.clone());
+    krb5_kdc::change_password_shared(
+        &store,
+        &user,
+        TEST_REALM,
+        b"raced-password-2",
+        0,
+        &actor,
+        &[],
+        |_| Ok(()),
+    )
+    .unwrap();
+    *host.deny.lock().unwrap() = Some(KADM5_AUTH_MODIFY);
+    let args = chpass_args(TEST_USER, "refused-password");
+    let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL, &args).unwrap();
+    assert_eq!(ret_code(&out), KADM5_AUTH_MODIFY);
+    let tokens = std::mem::take(&mut *host.tokens.lock().unwrap());
+    assert_eq!(tokens, [false, true, false, true, true]);
 }
 
 #[test]
