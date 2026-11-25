@@ -180,9 +180,9 @@ finish() {    # on every exit
 fail() { REASON="$*"; LEG_RC=1; note "LEG_FAIL: $*"; exit 1; }
 deadline() { [ "$SECONDS" -le "$MAX_LEG_S" ] || fail "the leg ran past its $MAX_LEG_S s deadline"; }
 
-# The session's own /tmp/claude-* and /tmp/grok-file-lock-*, and Chromium's rotating files, are not this leg's.
+# The session's own /tmp/claude-* and /tmp/grok-file-lock-*, and the desktop's Chromium and GIMP names, are not this leg's.
 # D12: also skip the undotted Chromium dirs, and count only additions. A removal is INFO.
-host_tmp_snapshot() { find /tmp -maxdepth 1 -user "$(id -u)" 2>/dev/null | grep -v -e '^/tmp/claude-' -e '^/tmp/grok-file-lock-' -e '^/tmp/\.org\.chromium\.Chromium\.' -e '^/tmp/org\.chromium\.Chromium\.' | sort; }
+host_tmp_snapshot() { find /tmp -maxdepth 1 -user "$(id -u)" 2>/dev/null | grep -v -e '^/tmp/claude-' -e '^/tmp/grok-file-lock-' -e '^/tmp/\.org\.chromium\.Chromium\.' -e '^/tmp/org\.chromium\.Chromium\.' -e '^/tmp/scoped_dir' -e '^/tmp/gimp-' | sort; }
 host_tmp_check() {
     host_tmp_snapshot > "$OUT/host-tmp-after.txt"
     comm -13 "$OUT/host-tmp-before.txt" "$OUT/host-tmp-after.txt" > "$OUT/host-tmp-added.txt"
