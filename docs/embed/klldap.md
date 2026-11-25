@@ -1,132 +1,52 @@
-# KLLDAP alignment
+# KLLDAP
 
-Goal: kerber-rust becomes the pure-Rust KDC inside
-[KLLDAP](https://github.com/Aelieth/klldap) (AGPL-3.0-only), replacing
-the `lldap-kerberos` FFI wrapper (klldap's `kerberos` crate) around system MIT
-Kerberos. This document records what is aligned today, how KLLDAP's seam
-maps onto kerber-rust's API, and where the embed API is.
+[KLLDAP](https://github.com/Aelieth/klldap) (AGPL-3.0-only) runs kerber-rust as its KDC and its
+kadmind. This page covers what that build uses of kerber-rust, as of KLLDAP's 0.8.2 branch, which
+pins a 1.2.4 tag. Everything else about KLLDAP is in KLLDAP's own docs.
 
-Ground truth is the KLLDAP repository,
-[`Aelieth/klldap`](https://github.com/Aelieth/klldap), at **0.7.6**; the local
-checkout read for this page reports workspace version `0.7.4` in its
-`Cargo.toml`. Both trees are edition 2024 with `rust-version` 1.95.0.
-kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
+The combined program is AGPL because of KLLDAP. kerber-rust's own license doesn't change.
 
-## Toolchain parity
+## Shape
 
-| Knob | kerber-rust | KLLDAP |
-| --- | --- | --- |
-| edition | 2024 | 2024 |
-| MSRV (`rust-version`) | 1.95 | 1.95.0 |
-| CI `msrv` job | `cargo build --workspace --all-targets --locked` on 1.95; the tests run on 1.95 in `nightly.yml`'s `msrv-test` | (klldap's own CI) |
-| async | sync (no tokio) | tokio; the embed runs the KDC's loop on a thread of its own |
-| `unsafe` | product `forbid(unsafe_code)` | its `kerberos` crate's `src/ffi.rs` only (the FFI this replaces) |
+KLLDAP is one program with one database:
+- It links kerber-rust's crates into its own server binary. There is no FFI wrapper, no second
+  process and no kdb file.
+- The realm's rows live in the directory's database (SQLite, PostgreSQL or MySQL/MariaDB), and
+  KLLDAP's code writes them.
+- kerber-rust reads and writes those rows only through the host traits in
+  [host-contract.md](host-contract.md).
 
-## Shared crates
+## Crates and build
 
-| Crate | Status |
-| --- | --- |
-| `nix` | **0.31** on both sides (klldap resolves 0.31.3) |
-| chrono 0.4, thiserror 2, tracing 0.1, zeroize 1, getrandom 0.2, serde 1 | already the same major |
-| sha2, hmac, md-5 | a RustCrypto generation apart (see below): KLLDAP 0.10.9 / 0.12.1 / 0.10.6, kerber-rust 0.11.1 / 0.13.0 / 0.11.0 |
-| rasn, aes/des/rc4/camellia/cmac, p256, md4, pbkdf2 | kerber-only (additive) |
+- **Crates:** `krb5-admin` and `krb5-kdc` (both with default features off), `krb5-asn1`,
+  `krb5-config`, `krb5-crypto`, `krb5-gss`, `krb5-log`, `krb5-protocol` and `krb5-types`. They all
+  come from this repository by `git`, at one tag.
+- **rasn:** a `[patch.crates-io] rasn` from this repository, at the same tag. kerber-rust vendors
+  rasn 0.28.14 with a patch, and an embedder must carry it.
+- **P-384:** an embedder's own build needs `--cfg p384_backend="fiat"`, for example in its
+  `.cargo/config.toml`, because our cargo config doesn't reach it. Without the cfg, kerber-rust
+  refuses P-384 rather than use p384's default field, which isn't constant-time.
+- **jiff:** KLLDAP takes `jiff` 1.0.1 with `std` only. It never asks jiff for the system zone or
+  for a zone by name.
 
-P-384 needs `--cfg p384_backend="fiat"` in klldap's own build too (its `.cargo/config.toml`:
-`[target.'cfg(all())'] rustflags = ["--cfg", "p384_backend=\"fiat\""]`). Our cargo config does not
-reach an embedder, and without the cfg kerber-rust refuses P-384 rather than use p384's default
-field, which is not constant-time.
+## What KLLDAP implements and calls
 
-`rasn` is pinned at **0.28.14** with a vendored patch an embedder must carry. MIT golden DER
-(`crates/krb5-protocol/tests/golden_traces.rs`) still byte-matches
-checked-in `tests/traces/mit-*.der`. Dual `getrandom` 0.2/0.4 remains
-via `rasn-derive-impl` → `uuid` (proc-macro only).
+| kerber-rust interface | KLLDAP's use |
+|---|---|
+| `host::KerberosStore` (`load`, `commit_change`, `prepare`) | its SQL realm |
+| `admission::HostAdmission` (`check_as`, `as_notice`, `check_tgs`) | its admission. The rules it applies are KLLDAP's |
+| `KdcPolicy` | its live-clients policy |
+| Opening | `PrincipalStore`, `SharedStore`, `SharedDump`, `HostPaths`, `AdminSpec` and the profile types. For its one-time import from KLLDAP 0.7.2: `load_dump_with_stash_path`, `parse_dump` and `create_lockout_file` |
+| Serving | `serve_all_until` for the KDC and `krb5_admin::Kadmind` for kadmind, each on a thread of its own |
+| Writing from its own doors | shape C: `change_committing`, `change_password_shared_committing_then` and `create_password_shared_committing_then` |
+| Logging | `KdcLog` |
 
-kerber-rust has since moved to the newer RustCrypto generation (sha2 0.11.1,
-hmac 0.13.0, md-5 0.11.0); KLLDAP 0.7.6 is on the older (sha2 0.10.9, hmac 0.12.1,
-md-5 0.10.6). A co-build therefore compiles both generations of these three, which
-is build size only: nothing crosses `KerberosSync`, which passes `&str`, `String`,
-`bool` and `Result<_, String>`, so there is no type conflict and no behaviour
-change. The earlier scratch path-dep + `cargo tree -d` that showed no duplicate
-predates the bump; rerun it when KLLDAP wires the dependency.
+## Its directory users
 
-## Drift guard
+- A directory user's principal carries the host mark.
+- KLLDAP's own doors write in shape C ([password-interface.md](password-interface.md)).
+- A kadmin `cpw` of a directory user takes shape P. KLLDAP refuses a `-e` key/salt list there
+  with `KADM5_BAD_KEYSALTS`.
 
-When either tree bumps a shared crate, the other follows the same generation.
-kerber-rust is currently a generation ahead on sha2 / hmac / md-5; realigning
-KLLDAP is a KLLDAP-side item below. Optional check: co-located checkouts, a
-temporary path-dep, `cargo tree -d`, revert.
-
-## What KLLDAP runs today
-
-- `kerberos_manager` (klldap's `kerberos` crate, `src/manager.rs`) renders
-  `kerberos/kdc.template.conf` (`[kdcdefaults] kdc_ports = 750,88`,
-  `master_key_type` and `supported_enctypes` aes256-cts-hmac-sha1-96), runs
-  `kdb5_util create -s` with a random master password it then discards
-  (only the stash keeps the key), creates `admin/admin` with a random key and
-  its keytab, and supervises `krb5kdc` and `kadmind`.
-- The image publishes 88/tcp, 88/udp and 749/tcp; 464 is not published.
-- `LiveKerberos` (the same crate, `src/live.rs`) implements the seam below
-  through `libkadm5` (`kadm5_create_principal`, `kadm5_chpass_principal`,
-  `kadm5_delete_principal`, `kadm5_randkey_principal`, and
-  `kadm5_modify_principal` of `DISALLOW_ALL_TIX`), plus
-  `kadmin.local ktadd -e aes256-cts-hmac-sha1-96:normal,aes128-cts-hmac-sha1-96:normal`
-  for the Keycloak keytab.
-
-kerber-rust's KDC and kadmind start on KLLDAP's `kdc.conf` shape as it is:
-`scripts/kdc-gate.sh` restarts a realm on `kdc_ports = 750,88` with no listener
-relation for kadmind or kpasswd and drives MIT `kinit` (TCP 88, UDP 750),
-`kadmin` (`addprinc -randkey`, `ktadd` on 749) and `kinit -k` at the
-container's non-loopback address.
-
-## The seam
-
-KLLDAP reaches its KDC through the `KerberosSync` trait
-(klldap's `domain-handlers` crate, `src/kerberos.rs`), registered with
-`set_kerberos_backend`; errors are `String`. The embed implements it over
-kerber-rust's `PrincipalStore`, so the directory stays the writer; its mutating seam calls run inside `PrincipalStore::change`, and the two password helpers take the store's lock themselves (see [`api.md`](api.md)):
-
-| `KerberosSync` | kerber-rust (`krb5_kdc::PrincipalStore` unless named) | Note |
-| --- | --- | --- |
-| `ready` | the embedded listener's own state | KLLDAP probes TCP to the KDC port today |
-| `sync_principal` (chpass, else create) | `change_password_shared`; on `NotFound`, `create_password_shared`, and on its `AlreadyExists` (a race) the change again | `user@REALM`, keys per `supported_enctypes`; both derive under no lock, so KDC reads don't wait, except in the two cases [`api.md`](api.md#one-store-and-its-locking) names |
-| `delete_principal` (missing is Ok) | `remove_in` | the ACL-gated `delete` is for kadmind |
-| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor. A missing principal is `NotFound`; the adapter decides |
-| `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local` (store `ktadd_local_atomic`): with `rotate` set it re-randomizes the principal's keys before extracting, `-norandkey` extracts the current keys, and the rotation persists only after the write succeeds; or `chrand_etypes_keepold_in` with chosen enctypes such as aes256 + aes128 then `Keytab::write_file` | a rotating export moves the kvno each time; `-norandkey` does not |
-| persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
-| the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it. Register on that store, or before open; a module registered on the process default after open is not on that store |
-
-## Policy and audit
-
-KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALOG`) marks each item "Not yet enforced" on the directory side. The KDC side is the MIT feature or the plugin interface an embedder registers. Nothing here reads the OU catalog.
-
-| KLLDAP item | Where it is served |
-| --- | --- |
-| `lockout-threshold` | kadm5 policy `max_fail` (`store/policy.rs` `max_fail_for`). `0` is no lockout. The KDC returns `LOCKED_OUT` / `CLIENT_REVOKED` from that count. |
-| `lockout-duration-seconds` | kadm5 policy `pw_lockout_duration` on the same policy. `0` is permanently locked until an administrator unlocks it. |
-| `inactivity-days` | the KDC records `last_success` (`PrincipalRead::last_success_of`, `kdb.rs`). It does not disable a principal after N quiet days. `set_status` is how an account is enabled or disabled. |
-| `require-mfa` | OTP preauth (RFC 6560): the `otp` kdcpreauth module asks an embedder `OtpVerifier`; KLLDAP registers its TOTP check and writes the principal's `otp` attribute (`examples/embed-realm`'s `krb5-otp-kdc` shows the path). MIT does not refuse a password login for a principal that keeps a key, so MFA is enforced one of three ways, each with the indicator the `otp` attribute names or the type's `[otp]` `<type>` indicator, and none on krbtgt (which would refuse the keytab login that gets the FAST armor ticket): **(a)** `require_auth = <indicator>` on each service to protect — MIT-native and per-service, but the client still gets a TGT and only the protected service refuses; **(b)** an embedder `KdcPolicy`, e.g. `examples/embed-realm`'s `require_mfa`, refusing the AS and the TGS of a flagged client whose ticket lacks the indicator (denial code 24, which neither reveals the password oracle nor skips the lockout count) — KDC-wide and strongest, but custom; **(c)** a keyless principal — no long-term key, so no password to fall back to, simplest but with no password path at all. |
-| `login-hours` | not built in. An embedder `KdcPolicy` denies outside the window. `check_as` / `check_tgs` are enough; the request time is the KDC's clock. |
-| `allowed-networks` | not built in. An embedder `KdcPolicy` reads the socket peer from `check_as_from` / `check_tgs_from`. That address is the accepted socket, not `request.addresses`. |
-
-`[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. Register a kdcpolicy or audit module on the store, or before the store is opened. A global register after open applies only to stores opened later, and the KDC logs that at error. The audit name `json` loads only when `enable_only` lists it. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
-
-## The embed API
-
-The embed surface — one shared store and its `change()` lock, bootstrap and
-`open_or_create`, kadmind as a library, and the `kadm5_hook` and `kadm5_auth` interfaces — is in
-[`api.md`](api.md).
-
-## KLLDAP-side items the embed should carry
-
-- Realign KLLDAP's RustCrypto hashes to sha2 0.11 / hmac 0.13 / md-5 0.11 (as
-  kerber-rust resolves), or accept the duplicate generation in a co-build. A
-  KLLDAP-repo change; kerber-rust only reads KLLDAP here.
-- `kdc.template.conf` sets no `max_renewable_life`, so new principals get 0 and
-  tickets are not renewable (the reference client fleet fixes each user by hand with
-  `modprinc -maxrenewlife`). MIT and kerber-rust agree on that default; the
-  template should set `max_renewable_life = 7d`.
-- KLLDAP's container gate phases name MIT process names (`krb5kdc`,
-  `kadmind`), `kadmin.local` output and MIT file paths; they need MIT
-  `kinit` / `klist` / `kvno` as clients only.
-- Kerberos as the combined work is AGPL because of klldap; kerber-rust's own
-  license does not change.
+KLLDAP's other rules for its users, and what it does when the realm can't open, are in KLLDAP's
+docs.

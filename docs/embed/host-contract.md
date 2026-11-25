@@ -86,7 +86,8 @@ commit; `rows[..].host_owned` in the commit is the authority.
   - `before`, `after`: `Option<Principal>`.
   - `mask`: the kadm5 bits whose values differ (KVNO, KEY_DATA, TL_DATA, POLICY and so on).
   - `host_owned`: the mark on before or after.
-- `prepared`: what your `prepare` returned for this write.
+- `prepared`: what your `prepare` returned for this write. It reaches the one commit that writes,
+  a rerun under the lock included ([password-interface.md](password-interface.md)).
 - `batch`: the sealed `RealmBatch` rows, as in 1.2.2.
 
 Each change that reaches your commit is logged once at debug: `host change: <intent>, rows N`,
