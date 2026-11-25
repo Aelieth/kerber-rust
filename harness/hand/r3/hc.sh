@@ -95,11 +95,11 @@ deadline() {
     [ -z "$HARD_STOP_EPOCH" ] || [ "$(date +%s)" -lt "$HARD_STOP_EPOCH" ] || fail "the hold ran past the hard stop ($(date -u -d "@$HARD_STOP_EPOCH" +%FT%TZ))"
 }
 
-host_tmp_snapshot() { find /tmp -maxdepth 1 -user "$(id -u)" 2>/dev/null | grep -v -e '^/tmp/claude-' -e '^/tmp/\.org\.chromium\.Chromium\.' | sort; }
+host_tmp_snapshot() { find /tmp -maxdepth 1 -user "$(id -u)" 2>/dev/null | grep -v -e '^/tmp/claude-' -e '^/tmp/grok-file-lock-' -e '^/tmp/\.org\.chromium\.Chromium\.' -e '^/tmp/org\.chromium\.Chromium\.' -e '^/tmp/scoped_dir' -e '^/tmp/gimp-' | sort; }
 host_tmp_check() {
     host_tmp_snapshot > "$OUT/host-tmp-after.txt"
     if diff -u "$OUT/host-tmp-before.txt" "$OUT/host-tmp-after.txt" > "$OUT/host-tmp.diff"; then
-        note "HOST_TMP nothing new in the host's /tmp (own entries; the session's /tmp/claude-* and the browser's singleton file left out)"
+        note "HOST_TMP nothing new in the host's /tmp (own entries; the session's /tmp/claude-* and /tmp/grok-file-lock-*, and the desktop's Chromium and GIMP names, left out)"
     else
         note "HOST_TMP DIFFERENT (see host-tmp.diff)"; LEG_RC=1; REASON="$REASON; host /tmp changed"
     fi
