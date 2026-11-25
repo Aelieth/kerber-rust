@@ -7,7 +7,19 @@ needs. A default build carries the daemon runtime (`daemon`, on by default) and 
 the test fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and
 `krb5-admin` with `default-features = false`.
 
-This page is as of v1.2.3. The host's side of the contract is in [host-contract.md](host-contract.md).
+This page is as of v1.2.4. The host's side of the contract is in [host-contract.md](host-contract.md).
+
+## New in 1.2.4
+
+Two changes break hosts: `TgsQuestion.client` is a `TgsClient` (`Found`, `NoEntry` or
+`ReadFailed`; `principal()` gives the entry), and `WriteIntent` is `#[non_exhaustive]`, built
+with `WriteIntent::new`. `WriteIntent.keysalts` holds the key/salt list a kadmin client sent with
+`-e`, as sent; it is empty without one. `PrincipalStore::change_as_kept` is `change_as` that
+leaves the host's prepared token in place when no commit runs, so the token reaches the commit
+that writes, a rerun under the lock included. `OtpVerifyRequest` gains `armor_client` and
+`armor_realm`, and `PreauthRock` gains `armor_client`. A debug line logs each `WriteIntent`
+(password hidden) as the host's commit gets it. The two write shapes are in
+[password-interface.md](password-interface.md).
 
 ## New in 1.2.3
 
@@ -280,7 +292,7 @@ embedder's workspace must carry the same patch, from this repository at the tag 
 
 ```toml
 [patch.crates-io]
-rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.3" }
+rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.4" }
 ```
 
 Without it, `krb5-types` fails to compile on `rasn::KERBER_RUST_NEEDS_THIS_PATCH`.

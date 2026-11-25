@@ -1,7 +1,7 @@
 # Host contract
 
 What an embedder that keeps the realm in its own database (a host store) must do, and
-what kerber-rust does for it. As of v1.2.3. The contract covers only principals the host
+what kerber-rust does for it. As of v1.2.4. The contract covers only principals the host
 owns (carrying the mark). Every other principal behaves as MIT's. Stricter-than-MIT rows
 are in [mit-deviations.md](../mit-deviations.md). The rest of the embed surface is in
 [api.md](api.md).

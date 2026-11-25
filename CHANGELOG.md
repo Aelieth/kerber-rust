@@ -16,6 +16,8 @@ any other `###` heading.
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-25
+
 ### Added
 
 - **kdc.** `OtpVerifyRequest` and `PreauthRock` name the FAST armor ticket's client and realm.
@@ -4814,7 +4816,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
 
-[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/Aelieth/kerber-rust/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/Aelieth/kerber-rust/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Aelieth/kerber-rust/compare/v1.2.0...v1.2.1
