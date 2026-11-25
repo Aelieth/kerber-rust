@@ -141,6 +141,7 @@ pub enum Caller {
 }
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct WriteIntent {
     pub operation: Operation,
     pub caller: Caller,
