@@ -46,6 +46,7 @@ any other `###` heading.
 
 - **ci.** cargo audit and cargo deny ignore RUSTSEC-2026-0543 (chrono unmaintained); see `docs/security.md`.
 - **field.** The /tmp guard survives absent trees and vanishing names; any other scan error fails it.
+- **ci.** The nightly runs cargo audit on every committed lock, so a new advisory shows without a PR.
 
 ## [1.2.3] - 2026-11-17
 
