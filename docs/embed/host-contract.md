@@ -76,6 +76,9 @@ commit; `rows[..].host_owned` in the commit is the authority.
     the served realm. A host that builds its profile in memory sets `default_realm` itself, or a
     bare name resolves to the process krb5.conf's realm.
   - `client_mask`: kadmind's request mask, after ACL restrictions.
+  - `keysalts`: the key/salt list a kadmin client sent with `-e` on create, chpass or chrand, as
+    sent; empty otherwise, kpasswd and the embed helpers included. To refuse a list, answer
+    `Denied` with `KADM5_BAD_KEYSALTS`; stock kadmin prints "Invalid key/salt tuples".
   - `keepold`, and `password` (a `Zeroizing` copy) for create-with-password, chpass and
     kpasswd.
 - `rows: Vec<RowChange>`, one per touched row, built from the change's own undo journal:
@@ -85,6 +88,9 @@ commit; `rows[..].host_owned` in the commit is the authority.
   - `host_owned`: the mark on before or after.
 - `prepared`: what your `prepare` returned for this write.
 - `batch`: the sealed `RealmBatch` rows, as in 1.2.2.
+
+Each change that reaches your commit is logged once at debug: `host change: <intent>, rows N`,
+with the password shown as `<set>`.
 
 Rules for the rows:
 
@@ -195,10 +201,10 @@ lockout. Install the module before any listener starts.
 - Asked for every TGS-REQ (normal, renew, validate, U2U, S4U2Self, S4U2Proxy; `TgsKind`) whose
   local subject carries the mark. The subject is the evidence ticket's client for S4U2Proxy, the
   S4U2Self user, and otherwise the header ticket's client.
-- Also asked when the subject's local entry is missing, with `client: None`, so a deleted user
-  stops renewing. Cross-realm clients are never asked.
-- `TgsQuestion`: `client: Option<&Principal>`, `subject`, `server`, `ticket`, `request`, `peer`,
-  `now`, `kind`.
+- Also asked when the subject's local entry is missing (`NoEntry`), so a deleted user stops
+  renewing, or can't be read (`ReadFailed`; MIT's TGS goes on). Cross-realm clients are never asked.
+- `TgsQuestion`: `client: TgsClient` (`Found`, `NoEntry`, `ReadFailed`; `principal()`), `subject`,
+  `server`, `ticket`, `request`, `peer`, `now`, `kind`.
 - A refusal of 18 shows as "Clients credentials have been revoked" on `kinit -R`. MIT's TGS
   never checks the client (`do_tgs_req.c:771-779`). There is no TGS notice (MIT has no TGS audit).
 
