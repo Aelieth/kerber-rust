@@ -2,6 +2,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use krb5_log::klog::{self, Severity};
+
 use super::{Before, HeldSaves, Principal, PrincipalStore, kadm5_mask};
 use crate::error::Error;
 use crate::host::{
@@ -382,6 +384,16 @@ impl PrincipalStore {
                 return Ok(Err(e));
             }
         };
+        if commit.is_some() || !skip {
+            klog::syslog(
+                Severity::Debug,
+                &format!(
+                    "host change: {:?}, rows {}",
+                    change.intent,
+                    change.rows.len()
+                ),
+            );
+        }
         let outcome = catch_unwind(AssertUnwindSafe(|| match commit {
             Some(c) => c(change),
             None if skip => Ok(()),
