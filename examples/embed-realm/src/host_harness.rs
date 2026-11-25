@@ -13,12 +13,13 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_config::{KdcPaths, ProfileSet};
+use krb5_embed_realm_example::totp::{SEEDS_ENV, TotpVerifier};
 use krb5_kdc::admission::{AsNotice, AsQuestion, HostAdmission, KdcRefusal, TgsQuestion};
 use krb5_kdc::host::{
     Caller, Denial, HostChange, HostPaths, HostPrepared, KerberosStore, KerberosStoreError,
     LoadedRealm, MemoryRealm, Operation, TargetPeek, WriteIntent,
 };
-use krb5_kdc::{AdminSpec, PrincipalStore, SharedDump};
+use krb5_kdc::{AdminSpec, OtpVerdict, OtpVerifier, OtpVerifyRequest, PrincipalStore, SharedDump};
 use krb5_types::PrincipalName;
 
 // MIT: `KADM5_AUTH_ADD` (kadm_err.et:9-11)
@@ -44,6 +45,27 @@ impl Events {
     fn line(&self, text: &str) {
         let mut f = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let _ = writeln!(f, "{text}");
+    }
+}
+
+struct Otp {
+    inner: TotpVerifier,
+    events: Arc<Events>,
+}
+
+impl OtpVerifier for Otp {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict {
+        let verdict = self.inner.verify(req);
+        self.events.line(&format!(
+            "otp {} armor={} {verdict:?}",
+            req.principal.id(),
+            req.armor_client.unparse_with_realm_lossy(&req.armor_realm)
+        ));
+        verdict
     }
 }
 
@@ -345,6 +367,16 @@ fn open_in(
     if let Some(keytab) = &boot.admin_keytab {
         keytab
             .write_file(dir.join("admin.keytab"))
+            .map_err(|e| e.to_string())?;
+    }
+    if std::env::var_os(SEEDS_ENV).is_some() {
+        store
+            .policy
+            .plugins
+            .register_otp_verifier(Arc::new(Otp {
+                inner: TotpVerifier::from_env(),
+                events: Arc::clone(&events),
+            }))
             .map_err(|e| e.to_string())?;
     }
     if std::env::var_os("KERBER_TEST_HOST_NO_MODULE").is_none() {
